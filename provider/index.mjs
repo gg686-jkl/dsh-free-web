@@ -338,7 +338,7 @@ async function directFetch(url, signal, settings) {
       headers: {
         Accept: 'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8',
         'Accept-Language': 'en,zh-CN;q=0.8',
-        'User-Agent': 'Mozilla/5.0 (compatible; dsh-web/1.4; +https://github.com/gg686-jkl/dsh-tinyfish)',
+        'User-Agent': 'Mozilla/5.0 (compatible; dsh-web/1.4; +https://github.com/gg686-jkl/dsh-free-web)',
       },
       signal: composite,
     })

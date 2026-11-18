@@ -1,6 +1,6 @@
 {
-  "name": "@local/dsh-tinyfish-mcp",
-  "version": "1.4.0",
+  "name": "@local/dsh-free-web",
+  "version": "1.5.0",
   "private": true,
   "type": "module",
   "description": "Free multi-backend web search and fetch behind dsh's own web_search / web_fetch tools: official tool names and schemas, fused free backends, no MCP tools.",

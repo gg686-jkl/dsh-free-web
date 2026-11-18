@@ -1,4 +1,4 @@
-# dsh-tinyfish
+# dsh-free-web
 
 **Free web search and fetch for dsh — four backends behind the two tools your model already knows.**
 
@@ -30,7 +30,7 @@ Copy this to any coding agent (dsh, Claude Code, Codex…). It carries its own s
 Install free web search and fetch for this machine's dsh. Keep the official web_search / web_fetch
 tools exactly as they are: do not remove, disable or replace tool-web.
 
-git clone https://github.com/gg686-jkl/dsh-tinyfish.git && cd dsh-tinyfish
+git clone https://github.com/gg686-jkl/dsh-free-web.git && cd dsh-free-web
 node install.mjs                              # add --profile <name> only if one was named
 
 Then: report the printed lines (provider row mounted / web seam pointed at the free provider /
@@ -38,22 +38,22 @@ official web_search/web_fetch enabled / search backends), run
 `dsh --profile "${DSH_PROFILE:-web}" --dump-config | grep -c web-tinyfish` (expect 1), and tell me to
 restart the app and open a new session. Only the current profile's cordis.patch.yml may change (the
 script backs it up first); do not write AGENTS.md. If a step fails, say so instead of claiming
-success. Full version: https://github.com/gg686-jkl/dsh-tinyfish/blob/main/PROMPT.md
+success. Full version: https://github.com/gg686-jkl/dsh-free-web/blob/main/PROMPT.md
 ```
 
 ## Or do it yourself
 
 ```bash
-git clone https://github.com/gg686-jkl/dsh-tinyfish.git
-cd dsh-tinyfish
+git clone https://github.com/gg686-jkl/dsh-free-web.git
+cd dsh-free-web
 node install.mjs
 ```
 
 No git (usual on a phone):
 
 ```bash
-curl -fsSL https://codeload.github.com/gg686-jkl/dsh-tinyfish/tar.gz/refs/heads/main | tar xz
-cd dsh-tinyfish-main && node install.mjs
+curl -fsSL https://codeload.github.com/gg686-jkl/dsh-free-web/tar.gz/refs/heads/main | tar xz
+cd dsh-free-web-main && node install.mjs
 ```
 
 Restart dsh, open a **new session**. That is the whole install.

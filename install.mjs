@@ -22,6 +22,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createRequire } from 'node:module'
 import { execFileSync } from 'node:child_process'
 
+// The markers keep the v1 name on purpose: a phone installed from v1.0 is upgraded by finding
+// this exact text, and renaming it would leave the old block behind next to a new one.
 const BEGIN = '# >>> dsh-tinyfish'
 const END = '# <<< dsh-tinyfish'
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -59,7 +61,7 @@ function usage() {
 }
 
 function die(message) {
-  console.error(`dsh-tinyfish: ${message}`)
+  console.error(`dsh-free-web: ${message}`)
   process.exit(1)
 }
 
@@ -152,10 +154,10 @@ function asPatchBody(text) {
 }
 
 if (opt.revert) {
-  if (!hasRegion) die('this profile has no managed dsh-tinyfish block')
+  if (!hasRegion) die('this profile has no managed dsh-free-web block')
   const stripped = withoutManagedRegion(original).replace(/\s*$/, '')
   writeFileSync(patchPath, (stripped.trim() === '' ? '[]' : stripped) + '\n')
-  console.log('removed the dsh-tinyfish block from', patchPath)
+  console.log('removed the managed block from', patchPath)
   console.log('restart the app, then use a new session to get the shipped web tools back')
   process.exit(0)
 }

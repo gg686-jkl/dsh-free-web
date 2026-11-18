@@ -21,7 +21,7 @@
 # instead, because it patches a profile from a checkout.
 - insert:
     - id: web-tinyfish
-      name: '@local/dsh-tinyfish-mcp/provider/index.mjs'
+      name: '@local/dsh-free-web/provider/index.mjs'
       config:
         backends: [tinyfish, keenable, anysearch, exa]
 - id: web

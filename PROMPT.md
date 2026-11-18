@@ -20,15 +20,15 @@ TinyFish key (optional): `sk-tinyfish-xxxx`
 2. Fetch the repo:
 
    ```bash
-   git clone https://github.com/gg686-jkl/dsh-tinyfish.git
+   git clone https://github.com/gg686-jkl/dsh-free-web.git
    ```
 
-   No git: `curl -fsSL https://codeload.github.com/gg686-jkl/dsh-tinyfish/tar.gz/refs/heads/main | tar xz`
+   No git: `curl -fsSL https://codeload.github.com/gg686-jkl/dsh-free-web/tar.gz/refs/heads/main | tar xz`
 
 3. Install:
 
    ```bash
-   cd dsh-tinyfish          # dsh-tinyfish-main for the tarball
+   cd dsh-free-web          # dsh-free-web-main for the tarball
    node install.mjs --key sk-tinyfish-xxxx      # omit --key to stay keyless
    ```
 

@@ -1,4 +1,4 @@
-# dsh-tinyfish
+# dsh-free-web
 
 **给 dsh 免费用上搜索和抓取 —— 四个后端，藏在模型已经认识的那两个工具背后。**
 
@@ -29,29 +29,29 @@ dsh 自带的 `web_search` / `web_fetch` 背后是 DeepSeek 的付费 Search & F
 把本机 dsh 的网页搜索/抓取换成免费的。不要删除、禁用或替换 tool-web，官方 web_search / web_fetch
 的名字和参数必须保持原样。
 
-git clone https://github.com/gg686-jkl/dsh-tinyfish.git && cd dsh-tinyfish
+git clone https://github.com/gg686-jkl/dsh-free-web.git && cd dsh-free-web
 node install.mjs                              # 用户指定了 profile 才加 --profile <名字>
 
 然后：原样贴回脚本打印的几行（provider row mounted / web seam pointed at the free provider /
 official web_search/web_fetch enabled / search backends），运行
 `dsh --profile "${DSH_PROFILE:-web}" --dump-config | grep -c web-tinyfish`（期望 1），并提醒我重启
 app、开新会话。只允许改当前 profile 的 cordis.patch.yml（脚本会先备份）；不要写 AGENTS.md。
-任何一步失败就直说，不要假装成功。完整版：https://github.com/gg686-jkl/dsh-tinyfish/blob/main/PROMPT.md
+任何一步失败就直说，不要假装成功。完整版：https://github.com/gg686-jkl/dsh-free-web/blob/main/PROMPT.md
 ```
 
 ## 或者自己装
 
 ```bash
-git clone https://github.com/gg686-jkl/dsh-tinyfish.git
-cd dsh-tinyfish
+git clone https://github.com/gg686-jkl/dsh-free-web.git
+cd dsh-free-web
 node install.mjs
 ```
 
 没有 git（手机上常见）：
 
 ```bash
-curl -fsSL https://codeload.github.com/gg686-jkl/dsh-tinyfish/tar.gz/refs/heads/main | tar xz
-cd dsh-tinyfish-main && node install.mjs
+curl -fsSL https://codeload.github.com/gg686-jkl/dsh-free-web/tar.gz/refs/heads/main | tar xz
+cd dsh-free-web-main && node install.mjs
 ```
 
 重启 dsh，开一个**新会话**，装完了。
