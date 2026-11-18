@@ -6,10 +6,21 @@ English | [中文](README.zh.md)
 
 ![Same tools, free backend](assets/hero.png)
 
-dsh ships `web_search` and `web_fetch`, backed by DeepSeek's paid Search & Fetch APIs (**$0.75 per
-1,000 requests each**). This keeps those exact tools — same names, same parameters, same rendering —
-and sends the calls to free backends instead: TinyFish, Keenable, AnySearch and Exa, queried in
-parallel and fused. **No key is required to start**, and no MCP server or extra tool is mounted.
+dsh ships `web_search` and `web_fetch`, backed by DeepSeek's paid Search & Fetch APIs. This keeps
+those exact tools — same names, same parameters, same rendering — and sends the calls to free
+backends instead: TinyFish, Keenable, AnySearch and Exa, queried in parallel and fused.
+
+## What you get
+
+| | stock dsh | with this |
+| --- | --- | --- |
+| Cost | $0.75 per 1,000 searches / fetches | **$0** |
+| Tools the model sees | `web_search`, `web_fetch` | `web_search`, `web_fetch` — unchanged |
+| Sources per search | one paid API | four free backends, fused and deduplicated |
+| Sign-up needed | a paid DeepSeek key | **none** — keyless backends and keyless page reads |
+| Extra tools / MCP servers | — | none |
+| Latency (measured) | — | p50 **~630 ms**, soft-deadlined at 800 ms |
+| Reversible | — | one `--revert`, profile backed up |
 
 ## Let an agent install it
 
@@ -45,87 +56,87 @@ curl -fsSL https://codeload.github.com/gg686-jkl/dsh-tinyfish/tar.gz/refs/heads/
 cd dsh-tinyfish-main && node install.mjs
 ```
 
-Restart dsh, open a **new session**. Search and fetch now run on the free backends.
+Restart dsh, open a **new session**. That is the whole install.
 
-Adding a [TinyFish key](https://agent.tinyfish.ai/api-keys) is optional and buys two things: a fourth
-search voice, and page reading as clean extracted text instead of raw HTML.
+A [TinyFish key](https://agent.tinyfish.ai/api-keys) is optional: it adds a fourth search voice and
+page reading as extracted text instead of raw HTML.
 
 ```bash
 node install.mjs --key sk-tinyfish-xxxx --force
 ```
 
-## Check
+## Check / undo
 
 ```bash
 dsh --profile "${DSH_PROFILE:-web}" --dump-config | grep -c web-tinyfish   # expect 1
+node install.mjs --revert                                                 # back to stock
 ```
 
-## Undo
+## How it works
+
+```
+web_search ─► tinyfish(key) ┐
+              keenable      ├─ parallel ─► weighted RRF ─► dedupe ─► 2 per host ─► top N
+              anysearch     │
+              exa(keyless)  ┘       800 ms soft deadline, 2.5 s ceiling, 5 min cache
+
+web_fetch  ─► tinyfish extracted text ─► exa keyless markdown ─► direct HTTP (page charset)
+```
+
+Only a `ctx.web` provider is registered. `@deepseek-ai/dsh-tool-web` keeps owning the tool names,
+schemas, descriptions and rendering, so the model sees exactly what it was trained on — no `mcp__*`
+names, no extra tools.
+
+Every design decision, the measurement behind it and what was rejected are in
+[docs/DESIGN.md](docs/DESIGN.md). The numbers are reproducible:
 
 ```bash
-node install.mjs --revert
+node probe.mjs --bench     # per-backend recall/junk/latency + strategy comparison, with 95% intervals
+node --test bench/         # fusion, cache, breaker, retry, redaction rules
 ```
 
 ## FAQ
 
-**What actually runs?** `web_search` fans out to TinyFish (with a key), Keenable and AnySearch
-(keyless), and Exa (keyless MCP), then fuses the ranked lists by weighted reciprocal rank fusion,
-collapses duplicate URLs and near-duplicate titles, down-weights listings whose "title" is just an
-address, and caps one host at two results so a single site cannot fill the answer. A **soft deadline**
-returns what has arrived at 800 ms instead of waiting for the slowest backend (a 2.5 s ceiling keeps
-it honest), repeated queries are answered from a 5-minute cache, a backend that keeps failing is
-skipped for a minute, and rate limits get no retry because the window would just answer 429 again.
-`web_fetch` reads through TinyFish, then Exa's keyless MCP tier (markdown, no key needed), then a
-direct HTTP read that honours the page's own charset.
+**What happens when one backend is down or throttled?** The others answer. A failure is logged, and a
+backend that keeps failing is skipped for a minute. Rate limits are not retried — the window would
+just answer 429 again. An answer is never empty because one source misbehaved.
 
-**Do the tools change?** No. `web_search` / `web_fetch` keep the official names, parameter schemas,
-descriptions and output format. This only registers a `ctx.web` provider, so the model sees the tools
-it was trained on — and no extra tools, no `mcp__*` names.
+**Do the tools change?** No. Same names, parameter schemas, descriptions and output format.
 
-**What does it cost?** Nothing. TinyFish search and fetch are free (500 requests/hour, 1,000 fetches/
-day), Keenable is 1,000 requests/hour keyless, AnySearch is 1,000/day keyless, and Exa's keyless MCP
-tier is free at its rate limit. DeepSeek's own APIs would be $0.75 per 1,000 calls each.
+**Is a key really optional?** Yes. Search uses the keyless backends and page reads go through Exa's
+keyless tier, so nothing needs signing up for. A key adds TinyFish search and extraction.
 
-**Is a key really optional?** Yes. Without one, search uses the three keyless backends and fetch
-still returns readable text, because Exa's keyless tier extracts the page. A key adds TinyFish search
-and its extraction as an extra hop.
+**What does it cost?** Nothing at these quotas: TinyFish 500 searches/hour and 1,000 fetches/day,
+Keenable 1,000/hour keyless, AnySearch 1,000/day keyless, Exa's keyless MCP tier at its rate limit.
 
-**How do you know any of this helps?** `node probe.mjs --bench` collects every backend's answer once,
-then scores several strategies on that same data with Wilson 95% intervals, and `docs/DESIGN.md`
-records what was adopted and what was rejected. On 52 queries: the soft deadline cut p50 from 923 ms
-to 632 ms with unchanged recall; the host cap cut the top host's share of a five-result answer from
-53% to 35%. `node --test bench/` covers the fusion, cache, breaker and redaction rules.
+**How do I change which backends run?** Edit `backends:` on the `web-tinyfish` row in your profile's
+`cordis.patch.yml` and restart; unknown ids are ignored.
 
-**How do I change which backends run?** Edit the `config:` block on the `web-tinyfish` row in your
-profile's `cordis.patch.yml` — `backends: [tinyfish, keenable, anysearch, exa]` — and restart. Run
-`node probe.mjs` first: it measures each backend's latency and results without starting dsh.
+**How do I see what one search did?** Start dsh with `DSH_WEB_DEBUG=1`; each search logs one line with
+every backend's latency, the fused count and any failure.
 
-**Can I have all 24 backends and the settings page?** `node install.mjs --with-dsh-search` installs
-[bestnite/search](https://github.com/bestnite/search)'s plugin (24 backends, GUI settings, ~17 MB).
-It adds its own tools to the session; ours stays the default so the tool list stays clean.
+**Weights?** Each backend carries a `trust` (Exa 1.0, TinyFish 0.95, Keenable 0.9, AnySearch 0.85),
+overridable with `weights:`. Measured, they land inside the same interval as equal weights — they are
+for demoting a backend that misbehaves on *your* network, not a claim of better ranking.
 
-**What about browser automation or deep research?** `--with-mcp` mounts TinyFish's MCP server for
-those. TinyFish bills them; search and fetch are the free ones.
+**Can I have all 24 backends and a settings page?** `node install.mjs --with-dsh-search` installs
+[bestnite/search](https://github.com/bestnite/search)'s plugin (24 backends, GUI, ~17 MB). It adds its
+own tools to the session; ours stays the default so the tool list stays clean.
 
-**Does it work on the dsh-go Android app?** Yes — same commands, no dependencies.
+**Browser automation or deep research?** `--with-mcp` mounts TinyFish's MCP server. TinyFish bills
+those; search and fetch are the free ones.
 
-**What are the weights?** Each backend carries a `trust` value (Exa 1.0, TinyFish 0.95, Keenable 0.9,
-AnySearch 0.85) that scales its vote in the fusion; override them with `weights:` on the `web-tinyfish`
-row. Measured, they land inside the same interval as equal weights — they exist to demote a backend
-that misbehaves in *your* environment, not to promise a better ranking.
+**Android (dsh-go)?** Same commands, no dependencies.
 
-**How do I see what happened in one search?** Set `DSH_WEB_DEBUG=1` before starting dsh: each search
-logs one line with every backend's latency, the fused count, and anything that failed.
-
-**Already installed the old TinyFish-only version?** `node install.mjs --force` upgrades in place.
+**Coming from the old TinyFish-only version?** `node install.mjs --force` upgrades in place.
 
 ## Notes
 
 - Requires dsh ≥ 0.2 and Node ≥ 22. Nothing is installed but the repo itself.
-- Backend endpoints, quotas and access rules are adapted from [bestnite/search](https://github.com/bestnite/search) (MIT),
-  which surveys 24 providers; this project implements the free subset with no runtime dependency.
+- Backend endpoints, quotas and access rules adapted from [bestnite/search](https://github.com/bestnite/search)
+  (MIT, surveys 24 providers); the free subset is implemented here with no runtime dependency.
 - The key lives in `$DSH_HOME/tinyfish.key` (mode 600) and never enters YAML.
-- TinyFish's fetch API does not return an HTTP status, so the tool reports `200` for a successful
-  extraction; the direct fallback reports the real status.
+- TinyFish's fetch API returns no HTTP status, so an extracted page reports `200`; the direct hop
+  reports the real status.
 
 MIT
