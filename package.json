@@ -1,9 +1,9 @@
 {
   "name": "@local/dsh-tinyfish-mcp",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
-  "description": "Runs dsh's own web_search and web_fetch on TinyFish's free search and fetch APIs.",
+  "description": "Free multi-backend web search and fetch behind dsh's own web_search / web_fetch tools: official tool names and schemas, fused free backends, no MCP tools.",
   "exports": {
     "./locale/*.json": "./locale/*.json",
     "./icon": "./icon.svg",

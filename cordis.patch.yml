@@ -1,27 +1,30 @@
-# TinyFish as the backend of dsh's own web tools.
+# Free web search and fetch behind dsh's own web_search / web_fetch tools.
 #
-# `web-tinyfish` registers TinyFish on the `ctx.web` capability seam. The shipped
-# `@deepseek-ai/dsh-tool-web` plugin keeps owning the model-facing `web_search`
-# and `web_fetch` tools, so their names, parameter schemas, descriptions and
-# output rendering are exactly the official ones — only the search and fetch
-# calls go to TinyFish's free Search & Fetch APIs.
+# `web-tinyfish` registers one provider on the `ctx.web` seam. The shipped
+# `@deepseek-ai/dsh-tool-web` plugin keeps owning the model-facing tools, so their
+# names, parameter schemas, descriptions and output rendering are exactly the
+# official ones — only the calls change:
 #
-# The `web` row below selects the TinyFish provider for both capabilities. No MCP
-# server is mounted: everything TinyFish gives away for free is search and fetch,
-# which these two official tools already cover, and no tool name gets a namespace
-# prefix.
+#   search → TinyFish (key) + Keenable + AnySearch + Exa (keyless), in parallel,
+#            fused with reciprocal rank fusion
+#   fetch  → TinyFish extracted text when a key exists, a direct HTTP read otherwise
+#
+# No MCP server and no extra tools are mounted, so nothing is namespaced and the
+# model keeps the tool set it was trained on.
 #
 # The API key is read at activation time from $DSH_HOME/tinyfish.key (mode 600);
-# it never appears in this file.
+# it never appears in this file, and it is optional.
 #
-# `name` is a package subpath, resolved from the profile that installs this
-# bundle (the bundle itself lives in that profile's node_modules), so nothing
-# here depends on where the repository was cloned. `install.mjs` writes an
-# absolute file:// URL instead, because it patches a profile from a checkout.
+# `name` is a package subpath, resolved from the profile that installs this bundle
+# (the bundle itself lives in that profile's node_modules), so nothing here depends
+# on where the repository was cloned. `install.mjs` writes an absolute file:// URL
+# instead, because it patches a profile from a checkout.
 - insert:
     - id: web-tinyfish
       name: '@local/dsh-tinyfish-mcp/provider/index.mjs'
+      config:
+        backends: [tinyfish, keenable, anysearch, exa]
 - id: web
   config:
-    searchProvider: tinyfish
-    fetchProvider: tinyfish
+    searchProvider: free-web
+    fetchProvider: free-web

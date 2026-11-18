@@ -1,17 +1,20 @@
 #!/usr/bin/env node
 /**
- * Put TinyFish behind dsh's own `web_search` / `web_fetch` tools.
+ * Put free web search and fetch behind dsh's own `web_search` / `web_fetch` tools.
  *
  * The shipped `@deepseek-ai/dsh-tool-web` plugin already owns those tool names,
- * parameter schemas, descriptions and rendering; this installer only registers
- * TinyFish as the `ctx.web` search + fetch provider, so a model trained on the
- * official tools sees exactly the shapes it knows. No MCP server is mounted:
- * the free TinyFish products are search and fetch, which these tools cover.
+ * parameter schemas, descriptions and rendering; this installer only registers a
+ * provider on the `ctx.web` seam, so a model trained on the official tools sees
+ * exactly the shapes it knows. The provider fans search out over free backends
+ * (TinyFish, Keenable, AnySearch, Exa) and reads pages with TinyFish or a direct
+ * HTTP fetch. No MCP server is mounted and no tool names change.
  *
- *   node install.mjs --key sk-tinyfish-... [--profile web]
+ *   node install.mjs [--profile web]            # keyless backends only: nothing to sign up for
+ *   node install.mjs --key sk-tinyfish-...      # adds TinyFish search + clean page text
  *   node install.mjs --profile web --force      # after moving the repo or upgrading dsh
  *   node install.mjs --profile web --revert     # remove the managed block
- *   node install.mjs --key ... --with-mcp       # also mount the paid MCP extras
+ *   node install.mjs --with-mcp                 # also mount TinyFish's paid MCP extras
+ *   node install.mjs --with-dsh-search          # also install bestnite/search's plugin
  */
 import { chmodSync, copyFileSync, existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -23,13 +26,14 @@ const BEGIN = '# >>> dsh-tinyfish'
 const END = '# <<< dsh-tinyfish'
 const HERE = dirname(fileURLToPath(import.meta.url))
 const PROVIDER = pathToFileURL(join(HERE, 'provider', 'index.mjs')).href
-const opt = { force: false, revert: false, withMcp: false, profile: null, key: null }
+const opt = { force: false, revert: false, withMcp: false, withDshSearch: false, profile: null, key: null }
 
 for (let i = 0; i < process.argv.length - 2; i += 1) {
   const arg = process.argv[i + 2]
   if (arg === '--force' || arg === '-f') opt.force = true
   else if (arg === '--revert') opt.revert = true
   else if (arg === '--with-mcp') opt.withMcp = true
+  else if (arg === '--with-dsh-search') opt.withDshSearch = true
   else if (arg === '--profile' || arg === '-p') opt.profile = process.argv[(i += 1) + 2]
   else if (arg === '--key' || arg === '-k') opt.key = process.argv[(i += 1) + 2]
   else if (arg === '--help' || arg === '-h') {
@@ -40,11 +44,15 @@ for (let i = 0; i < process.argv.length - 2; i += 1) {
 
 function usage() {
   return [
-    'usage: node install.mjs [--profile <name>] [--key <tinyfish-key>] [--with-mcp] [--force] [--revert]',
+    'usage: node install.mjs [--profile <name>] [--key <tinyfish-key>] [--force] [--revert]',
+    '                       [--with-mcp] [--with-dsh-search]',
     '',
     '  --profile  dsh profile to patch (default: $DSH_PROFILE_DIR, else $DSH_PROFILE, else "web")',
-    '  --key      TinyFish API key; written to $DSH_HOME/tinyfish.key (mode 600)',
+    '  --key      optional TinyFish API key, written to $DSH_HOME/tinyfish.key (mode 600);',
+    '             without it the keyless backends and a direct HTTP fetch carry the tools',
     '  --with-mcp also mount the TinyFish MCP server (paid extras: agent, browser, monitors)',
+    '  --with-dsh-search also install @nite07/dsh-search (24 backends + a settings page,',
+    '             and its own extra tools)',
     '  --force    regenerate the managed block, e.g. after moving this directory',
     '  --revert   remove the managed block again',
   ].join('\n')
@@ -153,12 +161,12 @@ if (opt.revert) {
 }
 
 const regionText = hasRegion ? original.slice(original.indexOf(BEGIN)) : ''
-const outdated = hasRegion && !regionText.includes('web-tinyfish')
+const outdated = hasRegion && (!regionText.includes('free-web') || !regionText.includes('exa'))
 if (hasRegion && !opt.force && !outdated) {
   console.log('already installed (managed block present); use --force to regenerate it')
   process.exit(0)
 }
-if (outdated) console.log('upgrading the existing block to the provider-based version (backup kept)')
+if (outdated) console.log('upgrading the existing block to the multi-backend version (backup kept)')
 
 const before = hasRegion ? '' : dumpConfig()
 if (!hasRegion && before.includes('web-tinyfish')) {
@@ -171,24 +179,29 @@ if (key) {
   writeFileSync(keyPath, key + '\n', { mode: 0o600 })
   chmodSync(keyPath, 0o600)
   console.log('wrote TinyFish key to', keyPath)
-} else if (!existsSync(keyPath)) {
-  die('no TinyFish API key: pass --key sk-tinyfish-... (get one at https://agent.tinyfish.ai/api-keys)')
-} else {
+} else if (existsSync(keyPath)) {
   console.log('reusing existing key file', keyPath)
+} else {
+  console.log('no TinyFish key: search uses the keyless backends, fetch uses a direct HTTP read')
+  console.log('  add one later with: node install.mjs --key sk-tinyfish-... (https://agent.tinyfish.ai/api-keys)')
 }
 
 const region = [
   BEGIN,
   '# Managed block: `node install.mjs --force` regenerates it, `--revert` removes it.',
-  '# 1. web-tinyfish registers TinyFish on the ctx.web seam. The shipped tool-web',
-  '#    plugin keeps owning web_search / web_fetch, so the model-facing names and',
-  '#    parameter schemas stay exactly the official ones.',
-  '# 2. The web row selects the TinyFish provider for both search and fetch.',
-  '#    Nothing else is mounted: no MCP tools, no namespaced names. The key is read',
-  '#    from $DSH_HOME/tinyfish.key (mode 600) and never appears in this file.',
+  '# 1. web-tinyfish registers free search + fetch on the ctx.web seam. The shipped',
+  '#    tool-web plugin keeps owning web_search / web_fetch, so the model-facing',
+  '#    names, parameters and rendering stay exactly the official ones.',
+  '# 2. Search fans out over free backends — TinyFish (key), Keenable, AnySearch and',
+  '#    Exa (keyless) — and fuses the answers. Fetch uses TinyFish extracted text when',
+  '#    a key is present and a direct HTTP read otherwise.',
+  '# 3. Nothing else is mounted by default: no MCP tools, no namespaced names, no',
+  '#    extra tools. The key is read from $DSH_HOME/tinyfish.key (mode 600).',
   '- insert:',
   '    - id: web-tinyfish',
   `      name: ${PROVIDER}`,
+  '      config:',
+  '        backends: [tinyfish, keenable, anysearch, exa]',
   ...(opt.withMcp
     ? [
         '    - id: mcp-tinyfish',
@@ -203,12 +216,35 @@ const region = [
         `          Authorization: !!js "'Bearer ' + process.getBuiltinModule('node:fs').readFileSync((process.env.DSH_HOME || process.env.HOME + '/.dsh') + '/tinyfish.key', 'utf8').trim()"`,
       ]
     : []),
+  ...(opt.withDshSearch
+    ? [
+        '    - id: nite-search',
+        "      name: '@nite07/dsh-search'",
+        '      config: {}',
+      ]
+    : []),
   '- id: web',
   '  config:',
-  '    searchProvider: tinyfish',
-  '    fetchProvider: tinyfish',
+  '    searchProvider: free-web',
+  '    fetchProvider: free-web',
   END,
 ]
+
+if (opt.withDshSearch) {
+  // Their plugin ships the 24-backend engine, its settings page and its own extra tools.
+  // It is a plain profile dependency, so pnpm is what installs it.
+  try {
+    execFileSync('dsh', ['plugin', '--profile', profile, 'add', '@nite07/dsh-search'], {
+      stdio: 'inherit',
+      timeout: 300000,
+      env: { ...process.env, DSH_HOME: dshHome },
+    })
+    console.log('installed @nite07/dsh-search into profile', profile)
+  } catch (error) {
+    console.log('could not install @nite07/dsh-search (offline, or pnpm refused); the row is still written')
+    console.log('  retry later with: dsh plugin --profile', profile, 'add @nite07/dsh-search')
+  }
+}
 
 const next = asPatchBody(withoutManagedRegion(original)) + region.join('\n') + '\n'
 
@@ -240,7 +276,11 @@ try {
 const officialTools = dump.includes("name: '@deepseek-ai/dsh-tool-web'") && !/name: '@deepseek-ai\/dsh-tool-web'\n\s+disabled: true/.test(dump)
 console.log('patched', patchPath)
 console.log('provider row mounted:', dump.includes('id: web-tinyfish'))
-console.log('web seam pointed at tinyfish:', /searchProvider: tinyfish/.test(dump) && /fetchProvider: tinyfish/.test(dump))
+console.log('web seam pointed at the free provider:', /searchProvider: free-web/.test(dump) && /fetchProvider: free-web/.test(dump))
 console.log('official web_search/web_fetch enabled:', officialTools)
+console.log('search backends:', existsSync(keyPath) ? 'tinyfish, keenable, anysearch, exa' : 'keenable, anysearch, exa (no TinyFish key)')
 if (opt.withMcp) console.log('TinyFish MCP row (paid extras):', dump.includes('id: mcp-tinyfish'))
-console.log('\nNext: restart the app, open a NEW session, then run a web search: it should report using TinyFish.')
+if (opt.withDshSearch) console.log('dsh-search plugin row (24 backends):', dump.includes('id: nite-search'))
+console.log('\nNext: restart the app and open a NEW session. web_search / web_fetch stay exactly as they')
+console.log('are, now answered by the free backends; no other tool is added.')
+if (opt.withDshSearch) console.log('The 24-backend plugin is installed but not selected: enable backends in Settings -> Web search.')

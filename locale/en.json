@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "TinyFish Web Toolkit",
-    "description": "Runs dsh's web_search and web_fetch on TinyFish's free APIs. The official tools stay as they are."
+    "description": "Runs dsh's own web_search and web_fetch on free backends (TinyFish, Keenable, AnySearch, Exa) that are fused together. The official tool definitions stay untouched; no MCP tools are mounted."
   }
 }

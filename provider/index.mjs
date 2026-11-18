@@ -1,144 +1,228 @@
 /**
- * TinyFish as the backend of dsh's own `web_search` / `web_fetch` tools.
+ * Free web search and fetch behind dsh's own `web_search` / `web_fetch` tools.
  *
- * `@deepseek-ai/dsh-tool-web` owns the model-facing tool names, schemas, prompt
- * guidance and output rendering; this plugin only registers providers on the
- * `ctx.web` seam, so the model sees exactly the shipped web tools while the
- * actual search and fetch calls go to TinyFish.
+ * `@deepseek-ai/dsh-tool-web` owns the model-facing tool names, schemas, prompt guidance and
+ * rendering; this plugin only registers providers on the `ctx.web` seam. The model sees the
+ * shipped tools, unchanged, while the calls fan out over free backends:
  *
- * Registered ids: `tinyfish` for both capabilities. Point the `web` row at them
- * (`searchProvider: tinyfish`, `fetchProvider: tinyfish`) or export
- * `DSH_WEB_SEARCH_PROVIDER=tinyfish` / `DSH_WEB_FETCH_PROVIDER=tinyfish`.
+ *   search → tinyfish (key) + keenable + anysearch + exa (all keyless)
+ *            in parallel, fused with reciprocal rank fusion
+ *   fetch  → tinyfish extracted text (key), falling back to a direct HTTP read
+ *
+ * No key is required to start: the keyless backends answer searches, and a direct HTTP read
+ * answers fetches. A TinyFish key adds one more search voice and clean page text.
+ *
+ * Registered provider ids: `free-web` (primary) and `tinyfish` (alias, so configuration
+ * written for v1.1 keeps working). Backend knowledge — endpoints, quotas, access rules — is
+ * adapted from bestnite/search (MIT): https://github.com/bestnite/search
  */
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { SearchFailure } from './backend.mjs'
+import { fuse } from './fusion.mjs'
+import * as tinyfish from './backends/tinyfish.mjs'
+import * as keenable from './backends/keenable.mjs'
+import * as anysearch from './backends/anysearch.mjs'
+import * as exa from './backends/exa.mjs'
 
 export const name = 'web-tinyfish'
 export const inject = ['web']
 
+const BACKENDS = { tinyfish, keenable, anysearch, exa }
+
 const DEFAULTS = {
+  /** Enabled by default: one keyed backend plus two that need no account at all. */
+  backends: ['tinyfish', 'keenable', 'anysearch', 'exa'],
+  /** Backends that exist but stay off unless asked for. */
+  extraBackends: [],
+  perBackendTimeoutMs: 8_000,
+  overallTimeoutMs: 20_000,
+  fetchFallback: true,
+  keyFile: '',
+  clientTitle: 'dsh-web',
   searchUrl: 'https://api.search.tinyfish.ai',
   fetchUrl: 'https://api.fetch.tinyfish.ai',
-  keyFile: '',
-  timeoutMs: 60_000,
+  keenableEndpoint: 'https://api.keenable.ai/v1/search/public',
+  anysearchEndpoint: 'https://api.anysearch.com/v1/search',
+  exaEndpoint: 'https://mcp.exa.ai/mcp',
 }
 
-function resolveKeyFile(config) {
-  if (config.keyFile) return config.keyFile
+function resolveKeyFile(settings) {
+  if (settings.keyFile) return settings.keyFile
   const home = process.env.DSH_HOME || join(process.env.HOME || '/root', '.dsh')
   return join(home, 'tinyfish.key')
 }
 
-function readKey(config) {
+function readKey(settings) {
   try {
-    return readFileSync(resolveKeyFile(config), 'utf8').trim()
+    return readFileSync(resolveKeyFile(settings), 'utf8').trim()
   } catch {
     return ''
   }
 }
 
 function failure(code, message, cause) {
-  return Object.assign(new Error(`tinyfish: ${message}`), { code, cause })
+  return Object.assign(new Error(message), { code, cause })
 }
 
-async function requestJson(url, init, signal, timeoutMs) {
-  const timeout = AbortSignal.timeout(timeoutMs)
-  const composite = signal ? AbortSignal.any([signal, timeout]) : timeout
-  let response
-  try {
-    response = await fetch(url, { ...init, signal: composite })
-  } catch (error) {
-    if (error?.name === 'AbortError' || error?.name === 'TimeoutError') {
-      throw failure('WEB_PROVIDER_TIMEOUT', `request timed out after ${timeoutMs}ms`, error)
-    }
-    throw failure('WEB_PROVIDER_FAILED', String(error?.message || error), error)
+function backendSettings(settings, apiKey) {
+  return {
+    apiKey,
+    timeoutMs: settings.perBackendTimeoutMs,
+    searchUrl: settings.searchUrl,
+    fetchUrl: settings.fetchUrl,
+    endpoint:
+      {
+        keenable: settings.keenableEndpoint,
+        anysearch: settings.anysearchEndpoint,
+        exa: settings.exaEndpoint,
+      }[settings.backendId] ?? '',
+    clientTitle: settings.clientTitle,
   }
-  const text = await response.text()
-  let data
-  try {
-    data = text ? JSON.parse(text) : {}
-  } catch (error) {
-    throw failure('WEB_PROVIDER_FAILED', `unparseable response (HTTP ${response.status})`, error)
-  }
-  if (!response.ok) {
-    throw failure('WEB_PROVIDER_FAILED', describeFailure(response.status, data), undefined)
-  }
-  return data
 }
 
-function describeFailure(status, data) {
-  const detail = data?.error?.message || data?.message || data?.detail || (Array.isArray(data?.errors) ? data.errors.join('; ') : '')
-  if (status === 401 || status === 403) return `TinyFish rejected the API key (HTTP ${status})${detail ? `: ${detail}` : ''}`
-  if (status === 429) return `TinyFish rate limit reached (HTTP 429)${detail ? `: ${detail}` : ''}`
-  if (status >= 500) return `TinyFish is unavailable (HTTP ${status})${detail ? `: ${detail}` : ''}`
-  return `TinyFish request failed (HTTP ${status})${detail ? `: ${detail}` : ''}`
+/** Every configured backend that can actually run right now, in configuration order. */
+function enabledBackends(settings) {
+  const ids = [...new Set([...(settings.backends || []), ...(settings.extraBackends || [])])]
+  const apiKey = readKey(settings)
+  return ids
+    .map((id) => ({ id, backend: BACKENDS[id] }))
+    .filter((entry) => entry.backend)
+    .map((entry) => ({ ...entry, settings: backendSettings({ ...settings, backendId: entry.id }, apiKey) }))
+    .filter((entry) => {
+      try {
+        return entry.backend.available(entry.settings) !== false
+      } catch {
+        return false
+      }
+    })
 }
 
 export function apply(ctx, config = {}) {
   const settings = { ...DEFAULTS, ...config }
-  const usable = () => readKey(settings) !== ''
-
-  const searchProvider = {
-    id: 'tinyfish',
-    available: usable,
-    ready: async () => usable(),
-    async search(request, signal) {
-      const key = readKey(settings)
-      if (!key) throw failure('WEB_PROVIDER_UNAVAILABLE', `no TinyFish API key at ${resolveKeyFile(settings)}`)
-      const url = new URL(settings.searchUrl)
-      url.searchParams.set('query', request.query)
-      const data = await requestJson(
-        url,
-        { headers: { 'X-API-Key': key, Accept: 'application/json' } },
-        signal,
-        settings.timeoutMs,
-      )
-      const results = Array.isArray(data.results) ? data.results : Array.isArray(data) ? data : []
-      const sources = results
-        .filter((item) => item && typeof item.url === 'string' && item.url)
-        .map((item) => ({
-          url: item.url,
-          ...(item.title ? { title: item.title } : {}),
-          ...(item.snippet ? { snippet: item.snippet } : {}),
-          ...(item.date ? { publishedAt: item.date } : {}),
-        }))
-      return { sources, truncated: false }
-    },
+  const warn = (message) => {
+    try {
+      if (typeof ctx.logger?.warn === 'function') ctx.logger.warn(message)
+      else console.warn(`[web-tinyfish] ${message}`)
+    } catch {
+      /* logging must never break a search */
+    }
   }
 
-  const fetchProvider = {
-    id: 'tinyfish',
-    available: usable,
-    ready: async () => usable(),
-    async fetch(request, signal) {
-      const key = readKey(settings)
-      if (!key) throw failure('WEB_PROVIDER_UNAVAILABLE', `no TinyFish API key at ${resolveKeyFile(settings)}`)
-      const data = await requestJson(
-        settings.fetchUrl,
-        {
-          method: 'POST',
-          headers: { 'X-API-Key': key, 'Content-Type': 'application/json', Accept: 'application/json' },
-          body: JSON.stringify({ urls: [request.url] }),
-        },
-        signal,
-        settings.timeoutMs,
+  const search = async (request, signal) => {
+    const enabled = enabledBackends(settings)
+    if (!enabled.length) {
+      throw failure(
+        'WEB_PROVIDER_UNAVAILABLE',
+        `no search backend is available: enable a keyless backend (${Object.keys(BACKENDS).join(', ')}) or provide a TinyFish key at ${resolveKeyFile(settings)}`,
       )
-      const first = Array.isArray(data.results) ? data.results[0] : undefined
-      if (!first) {
-        const detail = Array.isArray(data.errors) ? data.errors.map((e) => e?.message || e?.code || String(e)).join('; ') : ''
-        throw failure('WEB_FETCH_FAILED', detail || `TinyFish returned no content for ${request.url}`)
+    }
+
+    const overall = AbortSignal.timeout(settings.overallTimeoutMs)
+    const composite = signal ? AbortSignal.any([signal, overall]) : overall
+    const maxResults = Number.isInteger(request.maxResults) && request.maxResults > 0 ? request.maxResults : 8
+    // Ask each backend for a few extra rows so fusion has something to rank.
+    const perBackend = Math.min(20, Math.max(maxResults, 5))
+
+    const settled = await Promise.allSettled(
+      enabled.map((entry) => entry.backend.search({ query: request.query, maxResults: perBackend, signal: composite, settings: entry.settings })),
+    )
+
+    const lists = []
+    const failures = []
+    settled.forEach((outcome, index) => {
+      const id = enabled[index].id
+      if (outcome.status === 'fulfilled') {
+        if (outcome.value.length) lists.push(outcome.value)
+      } else {
+        const reason = outcome.reason instanceof SearchFailure ? outcome.reason.message : `${id}: ${outcome.reason?.message || outcome.reason}`
+        failures.push(reason)
       }
-      const content = typeof first.text === 'string' ? first.text : typeof first.description === 'string' ? first.description : ''
-      if (!content.trim()) throw failure('WEB_FETCH_UNSUPPORTED', `TinyFish returned an empty body for ${request.url}`)
-      return {
-        url: typeof first.final_url === 'string' && first.final_url ? first.final_url : request.url,
-        statusCode: 200,
-        body: { kind: 'text', content },
-        truncated: false,
-      }
-    },
+    })
+
+    if (!lists.length) {
+      const why = failures.length ? failures.join(' | ') : 'every backend answered with no results'
+      throw failure('WEB_PROVIDER_FAILED', `web search failed — ${why}`)
+    }
+    // A partial failure is reported, never fatal: the model still gets what came back.
+    if (failures.length) warn(`search degraded, ${lists.length}/${enabled.length} backend(s) answered: ${failures.join(' | ')}`)
+
+    return { sources: fuse(lists, maxResults), truncated: false }
   }
 
-  ctx.effect(() => ctx.web.registerSearchProvider(searchProvider))
-  ctx.effect(() => ctx.web.registerFetchProvider(fetchProvider))
+  const fetchPage = async (request, signal) => {
+    const apiKey = readKey(settings)
+    if (apiKey) {
+      try {
+        return await tinyfish.fetchPage({ url: request.url, signal }, backendSettings({ ...settings, backendId: 'tinyfish' }, apiKey))
+      } catch (error) {
+        if (!settings.fetchFallback) {
+          throw failure('WEB_FETCH_FAILED', `tinyfish: ${error?.message || error}`, error)
+        }
+        warn(`fetch fell back to a direct read for ${request.url}: ${error?.message || error}`)
+      }
+    }
+    return directFetch(request.url, signal, settings)
+  }
+
+  for (const id of ['free-web', 'tinyfish']) {
+    ctx.effect(() =>
+      ctx.web.registerSearchProvider({
+        id,
+        available: () => enabledBackends(settings).length > 0,
+        ready: async () => enabledBackends(settings).length > 0,
+        search,
+      }),
+    )
+    ctx.effect(() =>
+      ctx.web.registerFetchProvider({
+        id,
+        available: () => true,
+        ready: async () => true,
+        fetch: fetchPage,
+      }),
+    )
+  }
+}
+
+/**
+ * A plain HTTP read, used when no TinyFish key is configured or the extraction call failed.
+ * HTML stays HTML: the tool layer renders it, and guessing at readability would silently drop
+ * the parts of a page that matter.
+ */
+async function directFetch(url, signal, settings) {
+  const timeout = AbortSignal.timeout(settings.overallTimeoutMs)
+  const composite = signal ? AbortSignal.any([signal, timeout]) : timeout
+  let response
+  try {
+    response = await fetch(url, {
+      redirect: 'follow',
+      headers: {
+        Accept: 'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en,zh-CN;q=0.8',
+        'User-Agent': 'Mozilla/5.0 (compatible; dsh-web/1.2; +https://github.com/gg686-jkl/dsh-tinyfish)',
+      },
+      signal: composite,
+    })
+  } catch (error) {
+    if (error?.name === 'TimeoutError') throw failure('WEB_PROVIDER_TIMEOUT', `fetch timed out after ${settings.overallTimeoutMs}ms`, error)
+    throw failure('WEB_FETCH_FAILED', `fetch failed: ${error?.message || error}`, error)
+  }
+  const contentType = (response.headers.get('content-type') || '').toLowerCase()
+  if (!response.ok && !contentType.includes('html')) {
+    throw failure('WEB_FETCH_FAILED', `fetch failed (HTTP ${response.status})`)
+  }
+  const isHtml = contentType.includes('html')
+  const isText = isHtml || contentType.startsWith('text/') || contentType.includes('json') || contentType.includes('xml') || !contentType
+  if (!isText) {
+    throw failure('WEB_FETCH_UNSUPPORTED', `cannot read ${contentType || 'an unknown content type'} as text`)
+  }
+  const content = await response.text()
+  if (!content.trim()) throw failure('WEB_FETCH_UNSUPPORTED', `no content at ${url}`)
+  return {
+    url: response.url || url,
+    statusCode: response.status,
+    body: { kind: isHtml ? 'html' : 'text', content },
+    truncated: false,
+  }
 }
