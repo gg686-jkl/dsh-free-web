@@ -67,8 +67,9 @@ node install.mjs --revert
 ## 常见问题
 
 **实际跑的是什么？** `web_search` 同时问 TinyFish（有 Key 时）、Keenable、AnySearch（都免 Key）和
-Exa（免 Key 的 MCP 档），拿到结果后按 RRF 融合、按 URL 去重。某个源失败只会记日志，不影响其他源。
-`web_fetch` 有 Key 时走 TinyFish 提取正文，否则直连 HTTP 读取。
+Exa（免 Key 的 MCP 档），再按**加权 RRF** 融合：按 URL 去重、按标题合并近重复页面、并把「标题就是一个网址」
+的条目降权。某个源失败只会记日志，不影响其他源。`web_fetch` 依次尝试 TinyFish（有 Key）→ Exa 免 Key
+MCP（直接返回 markdown）→ 直连 HTTP。
 
 **工具会变吗？** 不会。名字、参数 schema、描述、输出格式都是官方原版；本项目只是注册 `ctx.web`
 的 provider，模型看到的还是它训练时认识的那两个工具 —— 没有额外工具，也没有 `mcp__*` 前缀。
@@ -77,7 +78,12 @@ Exa（免 Key 的 MCP 档），拿到结果后按 RRF 融合、按 URL 去重。
 1,000 次/小时，AnySearch 免 Key 1,000 次/天，Exa 免 Key 档按限流免费。换成 DeepSeek 自己的接口
 是各 $0.75 / 1,000 次。
 
-**Key 真的可以不填？** 可以。没有 Key 时用三个免 Key 源搜索，抓取走直连；有 Key 才多一路源和正文提取。
+**Key 真的可以不填？** 可以。没有 Key 时用三个免 Key 源搜索；抓取也能拿到正文，因为 Exa 免 Key 档会
+直接返回提取后的 markdown。
+
+**怎么知道融合比单源好？** `node probe.mjs --bench` 用 `bench/queries.json`（答案 URL 已知的查询）
+给每个源打分：recall@5、recall@1、垃圾率、延迟。15 条查询上融合后 **recall@5 100%、垃圾率 1%**，
+最好的单源是 recall@5 87–100%、垃圾率 4–24%。融合规则本身由 `node --test bench/` 覆盖。
 
 **怎么改启用哪些源？** 改 profile 的 `cordis.patch.yml` 里 `web-tinyfish` 行的 `config:`
 （`backends: [tinyfish, keenable, anysearch, exa]`），重启即可。改之前先跑 `node probe.mjs`：
@@ -91,6 +97,10 @@ Exa（免 Key 的 MCP 档），拿到结果后按 RRF 融合、按 URL 去重。
 搜索和抓取才是免费的。
 
 **dsh-go 手机端能用吗？** 能，同样的命令，不装任何依赖。
+
+**权重是什么？** 每个源带一个 `trust`（Exa 1.0、TinyFish 0.95、Keenable 0.9、AnySearch 0.85），
+在融合里给它的话投票加权；可在 `web-tinyfish` 行的 `weights:` 里覆盖。具体该给多少由 bench 在本机
+实测决定，不靠拍脑袋。
 
 **以前装过 MCP-only 的旧版？** `node install.mjs --force` 原地升级。
 

@@ -11,6 +11,9 @@ import { requestJson, toSources } from '../backend.mjs'
  * Free allowance: 1,000 requests/hour and 10/second per IP per endpoint. No account needed,
  * so this backend stays usable before anyone signs up for anything.
  */
+/** Ranking trust, measured with `node probe.mjs --bench`; see README. */
+export const trust = 0.9
+
 export const id = 'keenable'
 export const title = 'Keenable'
 

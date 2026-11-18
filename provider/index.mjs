@@ -6,8 +6,8 @@
  * shipped tools, unchanged, while the calls fan out over free backends:
  *
  *   search → tinyfish (key) + keenable + anysearch + exa (all keyless)
- *            in parallel, fused with reciprocal rank fusion
- *   fetch  → tinyfish extracted text (key), falling back to a direct HTTP read
+ *            in parallel, fused with weighted reciprocal rank fusion
+ *   fetch  → tinyfish extracted text (key) → exa markdown (keyless) → direct HTTP
  *
  * No key is required to start: the keyless backends answer searches, and a direct HTTP read
  * answers fetches. A TinyFish key adds one more search voice and clean page text.
@@ -38,6 +38,8 @@ const DEFAULTS = {
   perBackendTimeoutMs: 8_000,
   overallTimeoutMs: 20_000,
   fetchFallback: true,
+  /** Overrides each backend's own `trust`; measured with `node probe.mjs --bench`. */
+  weights: {},
   keyFile: '',
   clientTitle: 'dsh-web',
   searchUrl: 'https://api.search.tinyfish.ai',
@@ -133,7 +135,7 @@ export function apply(ctx, config = {}) {
     settled.forEach((outcome, index) => {
       const id = enabled[index].id
       if (outcome.status === 'fulfilled') {
-        if (outcome.value.length) lists.push(outcome.value)
+        if (outcome.value.length) lists.push({ id, sources: outcome.value, trust: enabled[index].backend.trust })
       } else {
         const reason = outcome.reason instanceof SearchFailure ? outcome.reason.message : `${id}: ${outcome.reason?.message || outcome.reason}`
         failures.push(reason)
@@ -147,22 +149,37 @@ export function apply(ctx, config = {}) {
     // A partial failure is reported, never fatal: the model still gets what came back.
     if (failures.length) warn(`search degraded, ${lists.length}/${enabled.length} backend(s) answered: ${failures.join(' | ')}`)
 
-    return { sources: fuse(lists, maxResults), truncated: false }
+    const fused = fuse(lists, maxResults, { weights: settings.weights })
+    if (fused.merged) warn(`collapsed ${fused.merged} near-duplicate result(s)`)
+    return { sources: fused.sources, truncated: false }
   }
 
   const fetchPage = async (request, signal) => {
     const apiKey = readKey(settings)
+    const reasons = []
+    // 1. TinyFish: the cleanest extraction, but it needs a key.
     if (apiKey) {
       try {
         return await tinyfish.fetchPage({ url: request.url, signal }, backendSettings({ ...settings, backendId: 'tinyfish' }, apiKey))
       } catch (error) {
-        if (!settings.fetchFallback) {
-          throw failure('WEB_FETCH_FAILED', `tinyfish: ${error?.message || error}`, error)
-        }
-        warn(`fetch fell back to a direct read for ${request.url}: ${error?.message || error}`)
+        reasons.push(`tinyfish: ${error?.message || error}`)
       }
     }
-    return directFetch(request.url, signal, settings)
+    // 2. Exa's keyless MCP tier answers with markdown, so a key is never required for text.
+    if (settings.fetchFallback) {
+      try {
+        return await exa.fetchPage({ url: request.url, signal }, backendSettings({ ...settings, backendId: 'exa' }, apiKey))
+      } catch (error) {
+        reasons.push(`exa: ${error?.message || error}`)
+      }
+      // 3. A direct read always works; the tool layer converts HTML to markdown itself.
+      try {
+        return await directFetch(request.url, signal, settings)
+      } catch (error) {
+        reasons.push(`direct: ${error?.message || error}`)
+      }
+    }
+    throw failure('WEB_FETCH_FAILED', `could not read ${request.url} — ${reasons.join(' | ')}`)
   }
 
   for (const id of ['free-web', 'tinyfish']) {

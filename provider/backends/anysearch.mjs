@@ -10,6 +10,9 @@ import { requestJson, toSources } from '../backend.mjs'
  * Free allowance: daily IP-metered quota resets at 00:00 UTC (1,000 calls/day on the free
  * plan). No key needed; an account raises the limit but is never required here.
  */
+/** Ranking trust, measured with `node probe.mjs --bench`; see README. */
+export const trust = 0.85
+
 export const id = 'anysearch'
 export const title = 'AnySearch'
 

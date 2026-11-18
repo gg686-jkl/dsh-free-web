@@ -1,0 +1,100 @@
+[
+  {
+    "query": "cordis plugin loader cordis.patch.yml",
+    "expect": [
+      "cordis.patch.yml"
+    ]
+  },
+  {
+    "query": "DeepSeek Harness documentation plugins",
+    "expect": [
+      "deepseek-harness",
+      "deepseek.com/harness"
+    ]
+  },
+  {
+    "query": "TinyFish pricing free search and fetch",
+    "expect": [
+      "tinyfish.ai/pricing"
+    ]
+  },
+  {
+    "query": "TinyFish search API documentation",
+    "expect": [
+      "docs.tinyfish.ai"
+    ]
+  },
+  {
+    "query": "Keenable search API documentation",
+    "expect": [
+      "keenable.ai"
+    ]
+  },
+  {
+    "query": "AnySearch API documentation",
+    "expect": [
+      "anysearch.com"
+    ]
+  },
+  {
+    "query": "Exa MCP server keyless search",
+    "expect": [
+      "exa.ai"
+    ]
+  },
+  {
+    "query": "DeepSeek API search pricing per 1000 requests",
+    "expect": [
+      "api-docs.deepseek.com"
+    ]
+  },
+  {
+    "query": "cordis context plugin framework github",
+    "expect": [
+      "cordiverse/cordis",
+      "cordis"
+    ]
+  },
+  {
+    "query": "Model Context Protocol specification",
+    "expect": [
+      "modelcontextprotocol.io",
+      "modelcontextprotocol"
+    ]
+  },
+  {
+    "query": "reciprocal rank fusion information retrieval",
+    "expect": [
+      "rrf",
+      "reciprocal-rank-fusion",
+      "rank"
+    ]
+  },
+  {
+    "query": "DeepSeek Harness agent preset",
+    "expect": [
+      "deepseek-harness",
+      "agent-preset"
+    ]
+  },
+  {
+    "query": "how to write a cordis bundle patch yml insert",
+    "expect": [
+      "cordis",
+      "patch"
+    ]
+  },
+  {
+    "query": "deepseek harness profile bundles node_modules",
+    "expect": [
+      "deepseek-harness",
+      "profile"
+    ]
+  },
+  {
+    "query": "tinyfish fetch api extract page text",
+    "expect": [
+      "tinyfish"
+    ]
+  }
+]

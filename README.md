@@ -69,9 +69,10 @@ node install.mjs --revert
 ## FAQ
 
 **What actually runs?** `web_search` fans out to TinyFish (with a key), Keenable and AnySearch
-(keyless), and Exa (keyless MCP), then fuses the ranked lists by reciprocal rank fusion and drops
-duplicate URLs. One backend failing is logged, not fatal. `web_fetch` reads through TinyFish when a
-key exists and falls back to a direct HTTP read otherwise.
+(keyless), and Exa (keyless MCP), then fuses the ranked lists by weighted reciprocal rank fusion,
+collapses duplicate URLs and near-duplicate titles, and down-weights listings whose "title" is just an
+address. One backend failing is logged, not fatal. `web_fetch` reads through TinyFish when a key
+exists, then Exa's keyless MCP tier (which answers in markdown), then a direct HTTP read.
 
 **Do the tools change?** No. `web_search` / `web_fetch` keep the official names, parameter schemas,
 descriptions and output format. This only registers a `ctx.web` provider, so the model sees the tools
@@ -82,7 +83,13 @@ day), Keenable is 1,000 requests/hour keyless, AnySearch is 1,000/day keyless, a
 tier is free at its rate limit. DeepSeek's own APIs would be $0.75 per 1,000 calls each.
 
 **Is a key really optional?** Yes. Without one, search uses the three keyless backends and fetch
-reads pages directly. A key adds TinyFish search and cleaner page text.
+still returns readable text, because Exa's keyless tier extracts the page. A key adds TinyFish search
+and its extraction as an extra hop.
+
+**How do you know fusion is better than one backend?** `node probe.mjs --bench` scores every backend
+against `bench/queries.json` — queries whose answer URL is known — and reports recall@5, recall@1,
+junk rate and latency. On 15 queries: fused **100% recall@5, 1% junk**, versus the best single backend
+at 87–100% recall@5 with 4–24% junk. `node --test bench/` covers the fusion rules themselves.
 
 **How do I change which backends run?** Edit the `config:` block on the `web-tinyfish` row in your
 profile's `cordis.patch.yml` — `backends: [tinyfish, keenable, anysearch, exa]` — and restart. Run
@@ -96,6 +103,10 @@ It adds its own tools to the session; ours stays the default so the tool list st
 those. TinyFish bills them; search and fetch are the free ones.
 
 **Does it work on the dsh-go Android app?** Yes — same commands, no dependencies.
+
+**What are the weights?** Each backend carries a `trust` value (Exa 1.0, TinyFish 0.95, Keenable 0.9,
+AnySearch 0.85) that scales its vote in the fusion; override them with `weights:` on the `web-tinyfish`
+row. The bench reports what they are worth on this machine rather than asserting a number.
 
 **Already installed the old TinyFish-only version?** `node install.mjs --force` upgrades in place.
 

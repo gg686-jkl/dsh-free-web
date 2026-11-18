@@ -10,6 +10,9 @@ import { requestJson, toSources } from '../backend.mjs'
  * search 30 requests/min and 500/hour, fetch 150 URLs/min and 1,000/day. Neither draws
  * from the wallet, so both keep working at a $0 balance.
  */
+/** Ranking trust, measured with `node probe.mjs --bench`; see README. */
+export const trust = 0.95
+
 export const id = 'tinyfish'
 export const title = 'TinyFish'
 

@@ -11,6 +11,9 @@ import { toSources } from '../backend.mjs'
  * Keyless calls need a direct IPv4 route: proxied or IPv6-only paths answer 403. That is a
  * property of the vendor's free tier, so this backend is simply skipped when it refuses.
  */
+/** Ranking trust, measured with `node probe.mjs --bench`; see README. */
+export const trust = 1.0
+
 export const id = 'exa'
 export const title = 'Exa'
 
@@ -19,6 +22,25 @@ export const available = () => true
 export async function search({ query, maxResults, signal, settings }) {
   const result = await callTool(settings.endpoint, 'web_search_exa', { query, numResults: maxResults || 8 }, signal)
   return parseBlocks(result)
+}
+
+/** One page as markdown text, keyless. Used as the second hop of the fetch chain. */
+export async function fetchPage({ url, signal }, settings) {
+  const result = await callTool(settings.endpoint, 'web_fetch_exa', { urls: [url], maxCharacters: 200_000 }, signal)
+  const text = Array.isArray(result?.content)
+    ? result.content
+        .filter((part) => part?.type === 'text' && typeof part.text === 'string')
+        .map((part) => part.text)
+        .join('\n')
+    : ''
+  if (!text.trim()) throw new Error(`Exa returned no content for ${url}`)
+  const final = text.match(/^URL:\s*(\S+)\s*$/m)?.[1]
+  return {
+    url: final && /^https?:\/\//.test(final) ? final : url,
+    statusCode: 200,
+    body: { kind: 'text', content: text.slice(0, 200_000) },
+    truncated: text.length > 200_000,
+  }
 }
 
 /** Turn Exa's text blocks into sources; anything without a URL is dropped, as everywhere else. */
