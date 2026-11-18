@@ -67,9 +67,11 @@ node install.mjs --revert
 ## 常见问题
 
 **实际跑的是什么？** `web_search` 同时问 TinyFish（有 Key 时）、Keenable、AnySearch（都免 Key）和
-Exa（免 Key 的 MCP 档），再按**加权 RRF** 融合：按 URL 去重、按标题合并近重复页面、并把「标题就是一个网址」
-的条目降权。某个源失败只会记日志，不影响其他源。`web_fetch` 依次尝试 TinyFish（有 Key）→ Exa 免 Key
-MCP（直接返回 markdown）→ 直连 HTTP。
+Exa（免 Key 的 MCP 档），再按**加权 RRF** 融合：按 URL 去重、按标题合并近重复页面、把「标题就是一个网址」
+的条目降权，并限制单个站点最多占 2 条（一个站霸屏说明不了什么）。**软截止 800ms** —— 到点先返回已到的
+结果，不再等最慢的源（2.5s 是硬上限）；重复查询走 5 分钟缓存；连续失败的源冷却 1 分钟；限流不重试，
+因为窗口期内重试还是 429。`web_fetch` 依次尝试 TinyFish → Exa 免 Key MCP（markdown，不需要 Key）→
+直连 HTTP（按页面声明的字符集解码，GBK 不再乱码）。
 
 **工具会变吗？** 不会。名字、参数 schema、描述、输出格式都是官方原版；本项目只是注册 `ctx.web`
 的 provider，模型看到的还是它训练时认识的那两个工具 —— 没有额外工具，也没有 `mcp__*` 前缀。
@@ -81,9 +83,9 @@ MCP（直接返回 markdown）→ 直连 HTTP。
 **Key 真的可以不填？** 可以。没有 Key 时用三个免 Key 源搜索；抓取也能拿到正文，因为 Exa 免 Key 档会
 直接返回提取后的 markdown。
 
-**怎么知道融合比单源好？** `node probe.mjs --bench` 用 `bench/queries.json`（答案 URL 已知的查询）
-给每个源打分：recall@5、recall@1、垃圾率、延迟。15 条查询上融合后 **recall@5 100%、垃圾率 1%**，
-最好的单源是 recall@5 87–100%、垃圾率 4–24%。融合规则本身由 `node --test bench/` 覆盖。
+**怎么知道这些改动有用？** `node probe.mjs --bench` 只用采集一次的数据评估多套策略，每项带 Wilson
+95% 置信区间；`docs/DESIGN.md` 记录了采纳和否决的每一项。52 条查询上：软截止把 p50 从 923ms 压到
+632ms 且召回不变；站点上限把 top-5 里最大单站占比从 53% 降到 35%。规则本身由 `node --test bench/` 覆盖。
 
 **怎么改启用哪些源？** 改 profile 的 `cordis.patch.yml` 里 `web-tinyfish` 行的 `config:`
 （`backends: [tinyfish, keenable, anysearch, exa]`），重启即可。改之前先跑 `node probe.mjs`：
@@ -99,8 +101,11 @@ MCP（直接返回 markdown）→ 直连 HTTP。
 **dsh-go 手机端能用吗？** 能，同样的命令，不装任何依赖。
 
 **权重是什么？** 每个源带一个 `trust`（Exa 1.0、TinyFish 0.95、Keenable 0.9、AnySearch 0.85），
-在融合里给它的话投票加权；可在 `web-tinyfish` 行的 `weights:` 里覆盖。具体该给多少由 bench 在本机
-实测决定，不靠拍脑袋。
+在融合里给它的话加权；可在 `web-tinyfish` 行的 `weights:` 里覆盖。实测它和等权落在同一个置信区间里 ——
+它的用途是让你在本机把某个不靠谱的源降权，而不是号称排序更好。
+
+**怎么看一次搜索到底发生了什么？** 启动 dsh 前设 `DSH_WEB_DEBUG=1`，每次搜索会打一行：各源延迟、
+融合后条数、以及失败原因。
 
 **以前装过 MCP-only 的旧版？** `node install.mjs --force` 原地升级。
 

@@ -70,9 +70,13 @@ node install.mjs --revert
 
 **What actually runs?** `web_search` fans out to TinyFish (with a key), Keenable and AnySearch
 (keyless), and Exa (keyless MCP), then fuses the ranked lists by weighted reciprocal rank fusion,
-collapses duplicate URLs and near-duplicate titles, and down-weights listings whose "title" is just an
-address. One backend failing is logged, not fatal. `web_fetch` reads through TinyFish when a key
-exists, then Exa's keyless MCP tier (which answers in markdown), then a direct HTTP read.
+collapses duplicate URLs and near-duplicate titles, down-weights listings whose "title" is just an
+address, and caps one host at two results so a single site cannot fill the answer. A **soft deadline**
+returns what has arrived at 800 ms instead of waiting for the slowest backend (a 2.5 s ceiling keeps
+it honest), repeated queries are answered from a 5-minute cache, a backend that keeps failing is
+skipped for a minute, and rate limits get no retry because the window would just answer 429 again.
+`web_fetch` reads through TinyFish, then Exa's keyless MCP tier (markdown, no key needed), then a
+direct HTTP read that honours the page's own charset.
 
 **Do the tools change?** No. `web_search` / `web_fetch` keep the official names, parameter schemas,
 descriptions and output format. This only registers a `ctx.web` provider, so the model sees the tools
@@ -86,10 +90,11 @@ tier is free at its rate limit. DeepSeek's own APIs would be $0.75 per 1,000 cal
 still returns readable text, because Exa's keyless tier extracts the page. A key adds TinyFish search
 and its extraction as an extra hop.
 
-**How do you know fusion is better than one backend?** `node probe.mjs --bench` scores every backend
-against `bench/queries.json` — queries whose answer URL is known — and reports recall@5, recall@1,
-junk rate and latency. On 15 queries: fused **100% recall@5, 1% junk**, versus the best single backend
-at 87–100% recall@5 with 4–24% junk. `node --test bench/` covers the fusion rules themselves.
+**How do you know any of this helps?** `node probe.mjs --bench` collects every backend's answer once,
+then scores several strategies on that same data with Wilson 95% intervals, and `docs/DESIGN.md`
+records what was adopted and what was rejected. On 52 queries: the soft deadline cut p50 from 923 ms
+to 632 ms with unchanged recall; the host cap cut the top host's share of a five-result answer from
+53% to 35%. `node --test bench/` covers the fusion, cache, breaker and redaction rules.
 
 **How do I change which backends run?** Edit the `config:` block on the `web-tinyfish` row in your
 profile's `cordis.patch.yml` — `backends: [tinyfish, keenable, anysearch, exa]` — and restart. Run
@@ -106,7 +111,11 @@ those. TinyFish bills them; search and fetch are the free ones.
 
 **What are the weights?** Each backend carries a `trust` value (Exa 1.0, TinyFish 0.95, Keenable 0.9,
 AnySearch 0.85) that scales its vote in the fusion; override them with `weights:` on the `web-tinyfish`
-row. The bench reports what they are worth on this machine rather than asserting a number.
+row. Measured, they land inside the same interval as equal weights — they exist to demote a backend
+that misbehaves in *your* environment, not to promise a better ranking.
+
+**How do I see what happened in one search?** Set `DSH_WEB_DEBUG=1` before starting dsh: each search
+logs one line with every backend's latency, the fused count, and anything that failed.
 
 **Already installed the old TinyFish-only version?** `node install.mjs --force` upgrades in place.
 

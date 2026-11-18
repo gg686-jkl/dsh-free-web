@@ -15,7 +15,11 @@ function readRpc(text) {
   if (!trimmed) throw new Error('empty response')
   if (trimmed.startsWith('{')) {
     const message = JSON.parse(trimmed)
-    if (message.error) throw new Error(message.error.message || JSON.stringify(message.error))
+    if (message.error) {
+      const failure = new Error(message.error.message || JSON.stringify(message.error))
+      failure.rpcCode = message.error.code
+      throw failure
+    }
     return message.result
   }
   for (const line of trimmed.split(/\r?\n/)) {
@@ -41,11 +45,19 @@ async function post(endpoint, body, signal, sessionId) {
   try {
     response = await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify(body), signal })
   } catch (error) {
-    if (error?.name === 'TimeoutError') throw new Error('timed out')
+    if (error?.name === 'TimeoutError') {
+      const timeout = new Error('timed out')
+      timeout.kind = 'timeout'
+      throw timeout
+    }
     throw error
   }
   const text = await response.text()
-  if (!response.ok) throw new Error(`HTTP ${response.status}${text ? `: ${text.slice(0, 200)}` : ''}`)
+  if (!response.ok) {
+    const error = new Error(`HTTP ${response.status}${text ? `: ${text.slice(0, 200)}` : ''}`)
+    error.status = response.status
+    throw error
+  }
   return { result: readRpc(text), sessionId: response.headers.get('mcp-session-id') || sessionId }
 }
 

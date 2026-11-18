@@ -1,12 +1,13 @@
 /**
- * The contract every search backend implements, plus the small HTTP helpers they share.
+ * The contract every search backend implements, the failure type they share, and the small
+ * HTTP helpers they use.
  *
  * A backend is a plain object:
  *
  *   {
  *     id: 'tinyfish',                 // stable id, used in configuration
  *     title: 'TinyFish',              // shown in logs and diagnostics
- *     needsKey: true,                 // whether `available()` depends on a credential
+ *     trust: 0.95,                    // ranking weight, measured with `probe.mjs --bench`
  *     available(settings): boolean,   // can this backend run right now?
  *     search({ query, maxResults, signal, settings }): Promise<Source[]>
  *   }
@@ -15,17 +16,39 @@
  *   { url, title?, snippet?, publishedAt? }
  *
  * Backends never throw for an empty result set — an empty array means "answered, nothing
- * found". They throw a `SearchFailure` for anything the caller should report (network,
- * authentication, quota), so the orchestrator can name the reason.
+ * found". They throw a `SearchFailure` for anything the caller should report, with a `kind`
+ * the retry and breaker logic can act on.
  */
 
-/** A failure a caller can report per backend without guessing what went wrong. */
+/** Kinds a caller can act on without parsing prose. */
+export const FAILURE = {
+  rateLimit: 'rate-limit',
+  quota: 'quota',
+  auth: 'auth',
+  server: 'server',
+  network: 'network',
+  timeout: 'timeout',
+  protocol: 'protocol',
+  config: 'config',
+}
+
 export class SearchFailure extends Error {
-  constructor(backend, message, cause) {
+  constructor(backend, message, { kind = FAILURE.server, status, cause } = {}) {
     super(`${backend}: ${message}`)
     this.name = 'SearchFailure'
     this.backend = backend
+    this.kind = kind
+    this.status = status
     this.cause = cause
+  }
+
+  /**
+   * Whether an immediate second attempt could plausibly succeed. A rate limit is not one:
+   * free tiers throttle for a window, so retrying spends latency to earn the same 429. The
+   * breaker takes those backends out for a while instead.
+   */
+  get retryable() {
+    return this.kind === FAILURE.server || this.kind === FAILURE.network
   }
 }
 
@@ -41,33 +64,51 @@ export async function requestJson(url, init, signal, timeoutMs, backend) {
   try {
     response = await fetch(url, { ...init, signal: deadline(signal, timeoutMs) })
   } catch (error) {
-    if (error?.name === 'TimeoutError') throw new SearchFailure(backend, `timed out after ${timeoutMs}ms`, error)
-    if (error?.name === 'AbortError') throw new SearchFailure(backend, 'cancelled', error)
-    throw new SearchFailure(backend, String(error?.message || error), error)
+    if (error?.name === 'TimeoutError') {
+      throw new SearchFailure(backend, `timed out after ${timeoutMs}ms`, { kind: FAILURE.timeout, cause: error })
+    }
+    if (error?.name === 'AbortError') throw new SearchFailure(backend, 'cancelled', { kind: FAILURE.timeout, cause: error })
+    throw new SearchFailure(backend, String(error?.message || error), { kind: FAILURE.network, cause: error })
   }
   const text = await response.text()
   let data
   try {
     data = text ? JSON.parse(text) : {}
   } catch (error) {
-    throw new SearchFailure(backend, `unparseable response (HTTP ${response.status})`, error)
+    throw new SearchFailure(backend, `unparseable response (HTTP ${response.status})`, {
+      kind: FAILURE.protocol,
+      status: response.status,
+      cause: error,
+    })
   }
-  if (!response.ok) throw new SearchFailure(backend, describeStatus(backend, response.status, data))
+  if (!response.ok) throw failureFor(backend, response.status, data)
   return data
 }
 
-function describeStatus(backend, status, data) {
-  const detail =
-    data?.error?.message ||
-    data?.message ||
-    data?.detail ||
-    (Array.isArray(data?.errors) ? data.errors.map((e) => e?.message || e?.code || String(e)).join('; ') : '')
+/**
+ * Turn an HTTP failure into a typed one.
+ *
+ * Provider bodies are deliberately not echoed for 401/402/403: at least one anonymous tier
+ * answers 402 with a freshly generated account and password in the body, and this text ends
+ * up in logs and, worse, in the model's context. The status and a short reason are enough.
+ */
+export function failureFor(backend, status, data) {
+  const detail = status >= 400 && status < 500 && [401, 402, 403].includes(status) ? '' : shortDetail(data)
   const suffix = detail ? `: ${detail}` : ''
-  if (status === 401 || status === 403) return `rejected the credential (HTTP ${status})${suffix}`
-  if (status === 402) return `quota exhausted (HTTP 402)${suffix}`
-  if (status === 429) return `rate limited (HTTP 429)${suffix}`
-  if (status >= 500) return `unavailable (HTTP ${status})${suffix}`
-  return `request failed (HTTP ${status})${suffix}`
+  if (status === 401 || status === 403) {
+    return new SearchFailure(backend, `rejected the credential (HTTP ${status})`, { kind: FAILURE.auth, status })
+  }
+  if (status === 402) return new SearchFailure(backend, `quota exhausted (HTTP 402)`, { kind: FAILURE.quota, status })
+  if (status === 429) {
+    return new SearchFailure(backend, `rate limited (HTTP 429)${suffix}`, { kind: FAILURE.rateLimit, status })
+  }
+  if (status >= 500) return new SearchFailure(backend, `unavailable (HTTP ${status})${suffix}`, { kind: FAILURE.server, status })
+  return new SearchFailure(backend, `request failed (HTTP ${status})${suffix}`, { kind: FAILURE.server, status })
+}
+
+function shortDetail(data) {
+  const value = data?.error?.message || data?.message || data?.detail
+  return typeof value === 'string' ? value.slice(0, 200) : ''
 }
 
 /** Keep only usable http(s) sources; a URL with credentials is dropped rather than passed on. */

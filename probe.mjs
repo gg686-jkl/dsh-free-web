@@ -5,11 +5,13 @@
  *   node probe.mjs                        # default query set, every backend
  *   node probe.mjs "query one" "query two"
  *   node probe.mjs --backend keenable --fetch https://example.com
- *   node probe.mjs --bench                # recall@5 / junk rate / latency per backend
+ *   node probe.mjs --bench                # per-backend table + strategy comparison
  *
- * `--bench` is the one that decides defaults: bench/queries.json lists queries whose answer
- * URL is known, and the table says which backend ranks those answers highest. Change a
- * backend's `trust` only with this table in hand.
+ * `--bench` collects every backend's answer once, then scores several fusion strategies on
+ * that same collected data: no strategy gets a second, luckier sample. Numbers carry a
+ * Wilson 95% interval, and the rule is to leave a knob alone when the intervals overlap —
+ * the previous release shipped and then removed a "best rank bonus" that only ever moved
+ * the result by noise.
  */
 import { readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
@@ -37,10 +39,14 @@ const queries = []
 let only
 let fetchUrl
 let bench = false
+let skip = []
+let paceMs = 200
 for (let i = 0; i < args.length; i += 1) {
   if (args[i] === '--backend') only = args[++i]
   else if (args[i] === '--fetch') fetchUrl = args[++i]
   else if (args[i] === '--bench') bench = true
+  else if (args[i] === '--skip') skip = args[++i].split(',').map((value) => value.trim()).filter(Boolean)
+  else if (args[i] === '--pace') paceMs = Number(args[++i]) || 0
   else queries.push(args[i])
 }
 
@@ -72,101 +78,137 @@ async function ask(id, backend, query, maxResults = 8) {
       signal: AbortSignal.timeout(DEFAULTS.timeoutMs),
       settings: settings(id),
     })
-    return { id, sources, latency: performance.now() - started, error: undefined }
+    return { id, sources, latency: performance.now() - started }
   } catch (error) {
     return { id, sources: [], latency: performance.now() - started, error: error.message }
   }
 }
 
 /** A result "answers" when one of the expected URL fragments is in it. */
-const hits = (sources, expect) =>
-  sources.slice(0, 5).some((source) => expect.some((fragment) => source.url.toLowerCase().includes(fragment.toLowerCase())))
+const answers = (sources, expect) =>
+  sources.some((source) => expect.some((fragment) => source.url.toLowerCase().includes(fragment.toLowerCase())))
 
 /** A listing whose title is just its address is noise, whatever it points at. */
 const isJunk = (source) => !source.title || /^(https?:\/\/)?[\w.-]+\.[a-z]{2,}(\/\S*)?$/i.test(source.title.trim())
 
+const hostOf = (url) => {
+  try {
+    return new URL(url).hostname.replace(/^www\./i, '').toLowerCase()
+  } catch {
+    return ''
+  }
+}
+
+/** Wilson 95% interval: a proportion from 52 samples deserves an error bar. */
+function wilson(hit, n) {
+  if (!n) return [0, 0]
+  const z = 1.96
+  const p = hit / n
+  const denominator = 1 + (z * z) / n
+  const centre = p + (z * z) / (2 * n)
+  const spread = z * Math.sqrt((p * (1 - p)) / n + (z * z) / (4 * n * n))
+  return [Math.max(0, (centre - spread) / denominator), Math.min(1, (centre + spread) / denominator)]
+}
+
+const median = (list) => {
+  if (!list.length) return 0
+  const sorted = [...list].sort((a, b) => a - b)
+  return sorted[Math.floor(sorted.length / 2)]
+}
+
+const p90 = (list) => {
+  if (!list.length) return 0
+  const sorted = [...list].sort((a, b) => a - b)
+  return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.9))]
+}
+
 async function runBench() {
   const cases = JSON.parse(readFileSync(join(HERE, 'bench', 'queries.json'), 'utf8'))
-  const ids = Object.keys(BACKENDS).filter((id) => !only || only === id).filter((id) => BACKENDS[id].available(settings(id)) !== false)
-  const rows = Object.fromEntries(ids.map((id) => [id, { n: 0, hit: 0, junk: 0, seen: 0, latencies: [] }]))
-  const fused = { n: 0, hit: 0, top1: 0, junk: 0, seen: 0, latencies: [] }
-  const equalWeights = { n: 0, hit: 0, top1: 0, junk: 0, seen: 0 }
-  // Weight sets are compared on the same collected answers, so the sweep costs no extra calls.
-  const measured = { exa: 1, tinyfish: 0.95, keenable: 0.9, anysearch: 0.85 }
-  const sweep = [
-    ['equal', Object.fromEntries(ids.map((id) => [id, 1])), 0],
-    ['shipped', Object.fromEntries(ids.map((id) => [id, BACKENDS[id].trust])), 0],
-    ['measured', Object.fromEntries(ids.map((id) => [id, measured[id] ?? 0.9])), 0],
-    ['exa-only', Object.fromEntries(ids.map((id) => [id, id === 'exa' ? 1 : 0])), 0],
-  ].map(([name, weights, bonus]) => ({ name, weights, bonus, n: 0, hit: 0, top1: 0, junk: 0, seen: 0 }))
+  const ids = Object.keys(BACKENDS)
+    .filter((id) => !only || only === id)
+    .filter((id) => !skip.includes(id))
+    .filter((id) => BACKENDS[id].available(settings(id)) !== false)
 
-  for (const item of cases) {
-    const startedQuery = performance.now()
-    const results = await Promise.all(ids.map((id) => ask(id, BACKENDS[id], item.query)))
-    const wallClock = performance.now() - startedQuery
-    const entries = []
-    for (const result of results) {
-      const row = rows[result.id]
-      row.n += 1
-      row.latencies.push(result.latency)
-      if (result.error) continue
-      if (result.sources.length) entries.push({ id: result.id, sources: result.sources, trust: BACKENDS[result.id].trust })
+  const records = []
+  const backendStats = Object.fromEntries(ids.map((id) => [id, { n: 0, hit: 0, top1: 0, junk: 0, seen: 0, latencies: [], misses: [] }]))
+
+  for (const [index, item] of cases.entries()) {
+    const answersIn = await Promise.all(ids.map((id) => ask(id, BACKENDS[id], item.query)))
+    for (const result of answersIn) {
+      const stat = backendStats[result.id]
+      stat.n += 1
+      stat.latencies.push(result.latency)
+      if (result.error) stat.misses.push(result.error.slice(0, 40))
       const top = result.sources.slice(0, 5)
-      if (hits(result.sources, item.expect)) row.hit += 1
-      if (hits(result.sources.slice(0, 1), item.expect)) row.top1 = (row.top1 ?? 0) + 1
-      row.seen += top.length
-      row.junk += top.filter(isJunk).length
+      const hit = answers(top, item.expect)
+      if (hit) stat.hit += 1
+      else stat.misses.push(item.query.slice(0, 30))
+      if (answers(result.sources.slice(0, 1), item.expect)) stat.top1 += 1
+      stat.seen += top.length
+      stat.junk += top.filter(isJunk).length
     }
-    const merged = fuse(entries, 10).sources
-    fused.latencies.push(wallClock)
-    fused.n += 1
-    if (hits(merged, item.expect)) fused.hit += 1
-    if (hits(merged.slice(0, 1), item.expect)) fused.top1 += 1
-    const topFused = merged.slice(0, 5)
-    fused.seen += topFused.length
-    fused.junk += topFused.filter(isJunk).length
-    for (const candidate of sweep) {
-      const ranked = fuse(entries, 10, { weights: candidate.weights }).sources
-      candidate.n += 1
-      if (hits(ranked, item.expect)) candidate.hit += 1
-      if (hits(ranked.slice(0, 1), item.expect)) candidate.top1 += 1
-      candidate.seen += ranked.slice(0, 5).length
-      candidate.junk += ranked.slice(0, 5).filter(isJunk).length
+    records.push({ item, answers: answersIn })
+    process.stdout.write(`\rcollected ${index + 1}/${cases.length}`)
+    if (paceMs) await new Promise((resolve) => setTimeout(resolve, paceMs))
+  }
+  process.stdout.write('\r' + ' '.repeat(30) + '\r')
+
+  const strategies = [
+    { name: 'baseline', deadline: Infinity, hostCap: 0, lexical: 0 },
+    { name: '+deadline700', deadline: 700, hostCap: 0, lexical: 0 },
+    { name: '+deadline900', deadline: 900, hostCap: 0, lexical: 0 },
+    { name: '+hostcap2', deadline: Infinity, hostCap: 2, lexical: 0 },
+    { name: '+lexical0.5', deadline: Infinity, hostCap: 0, lexical: 0.5 },
+    { name: 'all(700/host2/lex.5)', deadline: 700, hostCap: 2, lexical: 0.5 },
+    { name: 'all(900/host2/lex.5)', deadline: 900, hostCap: 2, lexical: 0.5 },
+  ]
+
+  const rows = []
+  for (const strategy of strategies) {
+    const stat = { n: 0, hit: 0, top1: 0, junk: 0, seen: 0, hostShare: 0, latencies: [], dropped: 0 }
+    for (const record of records) {
+      const usable = record.answers.filter((answer) => answer.sources.length && answer.latency <= strategy.deadline)
+      stat.dropped += record.answers.filter((answer) => answer.sources.length && answer.latency > strategy.deadline).length
+      if (!usable.length) {
+        stat.n += 1
+        continue
+      }
+      const entries = usable.map((answer) => ({ id: answer.id, sources: answer.sources, trust: BACKENDS[answer.id].trust }))
+      const top = fuse(entries, 5, { query: record.item.query, lexical: strategy.lexical, maxPerHost: strategy.hostCap }).sources
+      stat.n += 1
+      if (answers(top, record.item.expect)) stat.hit += 1
+      if (answers(top.slice(0, 1), record.item.expect)) stat.top1 += 1
+      stat.seen += top.length
+      stat.junk += top.filter(isJunk).length
+      const counts = new Map()
+      for (const source of top) counts.set(hostOf(source.url), (counts.get(hostOf(source.url)) ?? 0) + 1)
+      stat.hostShare += top.length ? Math.max(...counts.values()) / top.length : 0
+      stat.latencies.push(Math.max(...usable.map((answer) => answer.latency)))
     }
-    // The same inputs with every weight set to 1: the delta is what weighting is worth.
-    const flat = fuse(entries, 10, { weights: Object.fromEntries(ids.map((id) => [id, 1])) }).sources
-    equalWeights.n += 1
-    if (hits(flat, item.expect)) equalWeights.hit += 1
-    if (hits(flat.slice(0, 1), item.expect)) equalWeights.top1 += 1
-    equalWeights.seen += flat.slice(0, 5).length
-    equalWeights.junk += flat.slice(0, 5).filter(isJunk).length
+    rows.push({ strategy, stat })
+  }
+
+  console.log(`\nper backend, ${records.length} queries:\n`)
+  console.log(`${pad('backend', 12)} ${pad('recall@5', 18)} ${pad('recall@1', 10)} ${pad('junk', 7)} ${pad('p50', 7)} ${pad('p90', 7)} trust`)
+  for (const id of ids) {
+    const stat = backendStats[id]
+    if (!stat.n) continue
+    const [lo, hi] = wilson(stat.hit, stat.n)
     console.log(
-      `${pad(item.query.slice(0, 52), 54)} ${ids.map((id) => (hits(results.find((r) => r.id === id).sources, item.expect) ? '.' : 'x')).join(' ')}  fused:${hits(merged, item.expect) ? ' .' : ' x'}`,
+      `${pad(id, 12)} ${pad(`${pct(stat.hit / stat.n)} (${stat.hit}/${stat.n}) ${pct(lo)}-${pct(hi)}`, 18)} ${pad(pct(stat.top1 / stat.n), 10)} ${pad(pct(stat.seen ? stat.junk / stat.seen : 0), 7)} ${pad(ms(median(stat.latencies)), 7)} ${pad(ms(p90(stat.latencies)), 7)} ${BACKENDS[id].trust}`,
     )
   }
 
-  const median = (list) => {
-    if (!list.length) return 0
-    const sorted = [...list].sort((a, b) => a - b)
-    return sorted[Math.floor(sorted.length / 2)]
+  console.log(`\nstrategies, same collected answers:\n`)
+  console.log(`${pad('strategy', 22)} ${pad('recall@5', 18)} ${pad('recall@1', 8)} ${pad('junk', 6)} ${pad('host', 6)} ${pad('p50', 7)} ${pad('p90', 7)} dropped`)
+  for (const { strategy, stat } of rows) {
+    const [lo, hi] = wilson(stat.hit, stat.n)
+    console.log(
+      `${pad(strategy.name, 22)} ${pad(`${pct(stat.hit / stat.n)} (${stat.hit}/${stat.n}) ${pct(lo)}-${pct(hi)}`, 18)} ${pad(pct(stat.top1 / stat.n), 8)} ${pad(pct(stat.seen ? stat.junk / stat.seen : 0), 6)} ${pad(pct(stat.hostShare / stat.n), 6)} ${pad(ms(median(stat.latencies)), 7)} ${pad(ms(p90(stat.latencies)), 7)} ${stat.dropped}`,
+    )
   }
-
-  console.log(
-    `\n${pad('backend', 12)} ${pad('recall@5', 12)} ${pad('recall@1', 10)} ${pad('junk', 7)} ${pad('p50', 8)} trust`,
-  )
-  const line = (name, row, p50, trust) =>
-    `${pad(name, 12)} ${pad(`${pct(row.hit / row.n)} (${row.hit}/${row.n})`, 12)} ${pad(`${pct(row.top1 / row.n)} (${row.top1}/${row.n})`, 10)} ${pad(pct(row.seen ? row.junk / row.seen : 0), 7)} ${pad(p50, 8)} ${trust}`
-  for (const id of ids) {
-    const row = rows[id]
-    if (!row.n) continue
-    console.log(line(id, { ...row, top1: row.top1 ?? 0 }, ms(median(row.latencies)), BACKENDS[id].trust))
-  }
-  console.log(line('FUSED', fused, ms(median(fused.latencies)), 'shipped'))
-  console.log('\nweight sweep (same answers, different weights):')
-  for (const candidate of sweep) {
-    console.log(line(`  ${candidate.name}`, candidate, '-', JSON.stringify(candidate.weights)))
-  }
-  console.log(`\nlegend: . = expected page in top 5, x = missed`)
+  console.log('\nhost = mean share of the top host in a top-5; dropped = answers past the deadline.')
+  console.log('Recalls whose intervals overlap the baseline are not improvements.')
 }
 
 async function runQuery(query) {
@@ -189,7 +231,7 @@ async function runQuery(query) {
     if (result.sources.length) entries.push({ id, sources: result.sources, trust: backend.trust })
   }
   if (entries.length) {
-    const { sources, merged } = fuse(entries, 5)
+    const { sources, merged } = fuse(entries, 5, { query, maxPerHost: 2 })
     console.log(`  fused${merged ? ` (${merged} near-duplicate(s) collapsed)` : ''}:`)
     for (const source of sources) console.log(`  = ${(source.title || source.url).slice(0, 76)}`)
   } else {

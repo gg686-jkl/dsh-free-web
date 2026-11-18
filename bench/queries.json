@@ -8,8 +8,31 @@
   {
     "query": "DeepSeek Harness documentation plugins",
     "expect": [
-      "deepseek-harness",
-      "deepseek.com/harness"
+      "deepseek-harness"
+    ]
+  },
+  {
+    "query": "DeepSeek Harness agent preset configuration",
+    "expect": [
+      "deepseek-harness"
+    ]
+  },
+  {
+    "query": "cordis context plugin framework github",
+    "expect": [
+      "cordis"
+    ]
+  },
+  {
+    "query": "DeepSeek Harness profile bundles node_modules",
+    "expect": [
+      "deepseek-harness"
+    ]
+  },
+  {
+    "query": "how to write a cordis bundle patch yml insert",
+    "expect": [
+      "patch"
     ]
   },
   {
@@ -21,7 +44,13 @@
   {
     "query": "TinyFish search API documentation",
     "expect": [
-      "docs.tinyfish.ai"
+      "tinyfish"
+    ]
+  },
+  {
+    "query": "TinyFish fetch API extract page text",
+    "expect": [
+      "tinyfish"
     ]
   },
   {
@@ -43,22 +72,26 @@
     ]
   },
   {
+    "query": "Exa API pricing per 1000 searches",
+    "expect": [
+      "exa.ai"
+    ]
+  },
+  {
     "query": "DeepSeek API search pricing per 1000 requests",
     "expect": [
       "api-docs.deepseek.com"
     ]
   },
   {
-    "query": "cordis context plugin framework github",
+    "query": "Model Context Protocol specification",
     "expect": [
-      "cordiverse/cordis",
-      "cordis"
+      "modelcontextprotocol"
     ]
   },
   {
-    "query": "Model Context Protocol specification",
+    "query": "MCP streamable HTTP transport",
     "expect": [
-      "modelcontextprotocol.io",
       "modelcontextprotocol"
     ]
   },
@@ -66,35 +99,231 @@
     "query": "reciprocal rank fusion information retrieval",
     "expect": [
       "rrf",
-      "reciprocal-rank-fusion",
       "rank"
     ]
   },
   {
-    "query": "DeepSeek Harness agent preset",
+    "query": "BM25 ranking function formula",
     "expect": [
-      "deepseek-harness",
-      "agent-preset"
+      "bm25"
     ]
   },
   {
-    "query": "how to write a cordis bundle patch yml insert",
+    "query": "Wilson score interval binomial proportion",
     "expect": [
-      "cordis",
-      "patch"
+      "wilson"
     ]
   },
   {
-    "query": "deepseek harness profile bundles node_modules",
+    "query": "circuit breaker pattern retry backoff",
     "expect": [
-      "deepseek-harness",
-      "profile"
+      "circuit"
     ]
   },
   {
-    "query": "tinyfish fetch api extract page text",
+    "query": "HTTP status code 429 too many requests",
     "expect": [
-      "tinyfish"
+      "429",
+      "http"
+    ]
+  },
+  {
+    "query": "CORS preflight request headers",
+    "expect": [
+      "cors",
+      "origin"
+    ]
+  },
+  {
+    "query": "Content Security Policy directives reference",
+    "expect": [
+      "csp",
+      "content-security-policy"
+    ]
+  },
+  {
+    "query": "WebSocket protocol handshake upgrade header",
+    "expect": [
+      "websocket"
+    ]
+  },
+  {
+    "query": "server-sent events EventSource usage",
+    "expect": [
+      "server-sent",
+      "eventsource"
+    ]
+  },
+  {
+    "query": "JSON Web Token RFC 7519",
+    "expect": [
+      "jwt",
+      "rfc7519"
+    ]
+  },
+  {
+    "query": "OAuth 2.0 authorization code flow",
+    "expect": [
+      "oauth"
+    ]
+  },
+  {
+    "query": "Node.js TextDecoder charset support",
+    "expect": [
+      "textdecoder",
+      "nodejs.org"
+    ]
+  },
+  {
+    "query": "Node.js fetch redirect follow option",
+    "expect": [
+      "fetch",
+      "nodejs.org"
+    ]
+  },
+  {
+    "query": "pnpm workspace protocol link dependency",
+    "expect": [
+      "pnpm"
+    ]
+  },
+  {
+    "query": "npm package.json exports subpath patterns",
+    "expect": [
+      "exports",
+      "package.json"
+    ]
+  },
+  {
+    "query": "TypeScript satisfies operator",
+    "expect": [
+      "typescript"
+    ]
+  },
+  {
+    "query": "YAML specification merge key",
+    "expect": [
+      "yaml"
+    ]
+  },
+  {
+    "query": "Markdown commonmark specification",
+    "expect": [
+      "commonmark"
+    ]
+  },
+  {
+    "query": "Git rebase interactive continue conflict",
+    "expect": [
+      "git-scm"
+    ]
+  },
+  {
+    "query": "Docker compose healthcheck depends_on condition",
+    "expect": [
+      "docker"
+    ]
+  },
+  {
+    "query": "Playwright browser context storage state",
+    "expect": [
+      "playwright"
+    ]
+  },
+  {
+    "query": "GitHub Actions workflow cache node modules",
+    "expect": [
+      "github.com/actions",
+      "cache"
+    ]
+  },
+  {
+    "query": "Rust cargo feature flags documentation",
+    "expect": [
+      "rust-lang",
+      "feature"
+    ]
+  },
+  {
+    "query": "Python asyncio task group python 3.11",
+    "expect": [
+      "python"
+    ]
+  },
+  {
+    "query": "Go modules replace directive",
+    "expect": [
+      "go.dev"
+    ]
+  },
+  {
+    "query": "Bun runtime compatibility node api",
+    "expect": [
+      "bun.sh",
+      "bun"
+    ]
+  },
+  {
+    "query": "SQLite WAL mode concurrency",
+    "expect": [
+      "sqlite"
+    ]
+  },
+  {
+    "query": "PostgreSQL jsonb indexing gin",
+    "expect": [
+      "postgresql"
+    ]
+  },
+  {
+    "query": "Redis sorted set leaderboard",
+    "expect": [
+      "redis"
+    ]
+  },
+  {
+    "query": "Kubernetes liveness readiness probe",
+    "expect": [
+      "kubernetes.io"
+    ]
+  },
+  {
+    "query": "Terraform for_each dynamic block",
+    "expect": [
+      "terraform",
+      "hashicorp"
+    ]
+  },
+  {
+    "query": "nginx proxy_pass websocket upgrade",
+    "expect": [
+      "nginx"
+    ]
+  },
+  {
+    "query": "Vite plugin api transform hook",
+    "expect": [
+      "vitejs",
+      "vite.dev"
+    ]
+  },
+  {
+    "query": "React useEffect dependency array",
+    "expect": [
+      "react.dev",
+      "react"
+    ]
+  },
+  {
+    "query": "Vue 3 composition api ref reactive",
+    "expect": [
+      "vuejs"
+    ]
+  },
+  {
+    "query": "Tailwind CSS arbitrary values syntax",
+    "expect": [
+      "tailwindcss"
     ]
   }
 ]

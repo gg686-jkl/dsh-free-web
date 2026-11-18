@@ -105,3 +105,22 @@ test('no answers at all is an empty result, not a crash', () => {
   assert.deepEqual(fuse([], 5), { sources: [], merged: 0, contributed: {} })
   assert.deepEqual(fuse(entries(['a', []]), 5), { sources: [], merged: 0, contributed: {} })
 })
+
+test('one host cannot own the list: extras are demoted, not deleted', () => {
+  const one = ['a', 'b', 'c'].map((id, i) => source(`https://same.dev/${id}`, `Same ${id}`, { snippet: `snippet ${id}` }))
+  const other = source('https://other.dev/x', 'Other', { snippet: 'elsewhere' })
+  const result = fuse(entries(['a', one], ['b', [other]]), 4, { maxPerHost: 1 })
+  assert.equal(result.sources.length, 4, 'nothing is dropped')
+  assert.equal(result.sources[0].url, 'https://same.dev/a')
+  assert.equal(result.sources[1].url, 'https://other.dev/x', 'the other host moves up')
+})
+
+test('query-word coverage can lift a result that only one backend ranked', () => {
+  const offTopic = source('https://vague.dev/a', 'A vague page', { snippet: 'nothing about the ask' })
+  const onTopic = source('https://exact.dev/b', 'Cordis plugin loader', { snippet: 'cordis plugin loader patch yml' })
+  const list = entries(['a', [offTopic]], ['b', [onTopic]])
+  const plain = fuse(list, 1).sources[0].url
+  const lexical = fuse(list, 1, { query: 'cordis plugin loader patch yml', lexical: 2 }).sources[0].url
+  assert.equal(plain, 'https://vague.dev/a', 'rank alone puts the first list first')
+  assert.equal(lexical, 'https://exact.dev/b', 'query coverage flips it')
+})

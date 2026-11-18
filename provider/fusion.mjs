@@ -79,6 +79,16 @@ function jaccard(a, b) {
   return shared / (a.size + b.size - shared)
 }
 
+/** Query-word coverage of a listing: how much of what was asked appears in it. */
+export function coverage(query, source) {
+  const wanted = tokens(query)
+  if (!wanted.size) return 0
+  const have = tokens(`${source.title ?? ''} ${source.snippet ?? ''}`)
+  let hit = 0
+  for (const token of wanted) if (have.has(token)) hit += 1
+  return hit / wanted.size
+}
+
 function host(url) {
   try {
     return new URL(url).hostname.replace(/^www\./i, '').toLowerCase()
@@ -90,7 +100,11 @@ function host(url) {
 /**
  * @param entries  `[{ id, sources, trust }]` — one per backend that answered
  * @param limit    how many sources to return
- * @param options  `{ k, weights }`; weights override each backend's own trust
+ * @param options  `{ k, weights, query, lexical, maxPerHost }`
+ *   weights     override each backend's own trust
+ *   query       the search string; enables `lexical` weighting when given
+ *   lexical     λ for query-word coverage, 0 disables it (default 0)
+ *   maxPerHost  cap on results from one host; extras are demoted, never dropped (default 0 = off)
  * @returns        `{ sources, merged, contributed }`
  *   merged      — how many entries the duplicate passes removed
  *   contributed — per backend, how many of its sources survived into the result
@@ -98,6 +112,9 @@ function host(url) {
 export function fuse(entries, limit, options = {}) {
   const k = options.k ?? 60
   const weights = options.weights ?? {}
+  const lexical = Math.max(0, options.lexical ?? 0)
+  const query = typeof options.query === 'string' ? options.query : ''
+  const maxPerHost = Math.max(0, Math.floor(options.maxPerHost ?? 0))
   const scored = new Map()
   const contributed = {}
 
@@ -149,7 +166,33 @@ export function fuse(entries, limit, options = {}) {
   }
 
   kept.sort((a, b) => b.score - a.score)
-  const sources = kept.slice(0, Math.max(1, limit)).map((entry) => entry.source)
+  // Query-word coverage: RRF says which answers the backends agree on, this says which ones
+  // actually contain what was asked. Off unless λ is set.
+  const ordered =
+    lexical > 0 && query
+      ? [...kept]
+          .map((entry) => ({ ...entry, score: entry.score * (1 + lexical * coverage(query, entry.source)) }))
+          .sort((a, b) => b.score - a.score)
+      : kept
+
+  // One host must not own the answer list: heterogeneous sources serve the reader better, and a
+  // site that repeats itself rarely adds information after the second hit. Extras are demoted.
+  let final = ordered
+  if (maxPerHost > 0) {
+    const seen = new Map()
+    const head = []
+    const tail = []
+    for (const entry of ordered) {
+      const key = host(entry.source.url)
+      const used = seen.get(key) ?? 0
+      seen.set(key, used + 1)
+      if (used < maxPerHost) head.push(entry)
+      else tail.push(entry)
+    }
+    final = [...head, ...tail]
+  }
+
+  const sources = final.slice(0, Math.max(1, limit)).map((entry) => entry.source)
   for (const source of sources) {
     const key = normaliseUrl(source.url)
     for (const id of scored.get(key)?.sources ?? []) contributed[id] = (contributed[id] ?? 0) + 1

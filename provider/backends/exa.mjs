@@ -1,5 +1,5 @@
 import { callTool } from '../mcp.mjs'
-import { toSources } from '../backend.mjs'
+import { FAILURE, SearchFailure, failureFor, toSources } from '../backend.mjs'
 
 /**
  * Exa — the official keyless MCP tier: no API key, no sign-in, free at a rate limit.
@@ -20,13 +20,26 @@ export const title = 'Exa'
 export const available = () => true
 
 export async function search({ query, maxResults, signal, settings }) {
-  const result = await callTool(settings.endpoint, 'web_search_exa', { query, numResults: maxResults || 8 }, signal)
+  const result = await call(settings.endpoint, 'web_search_exa', { query, numResults: maxResults || 8 }, signal)
   return parseBlocks(result)
+}
+
+/** MCP failures arrive as transport errors; classify them so retry and breaker can act. */
+async function call(endpoint, tool, args, signal) {
+  try {
+    return await callTool(endpoint, tool, args, signal)
+  } catch (error) {
+    if (error?.status) throw failureFor(id, error.status, {})
+    throw new SearchFailure(id, String(error?.message || error).slice(0, 200), {
+      kind: error?.kind === 'timeout' ? FAILURE.timeout : FAILURE.network,
+      cause: error,
+    })
+  }
 }
 
 /** One page as markdown text, keyless. Used as the second hop of the fetch chain. */
 export async function fetchPage({ url, signal }, settings) {
-  const result = await callTool(settings.endpoint, 'web_fetch_exa', { urls: [url], maxCharacters: 200_000 }, signal)
+  const result = await call(settings.endpoint, 'web_fetch_exa', { urls: [url], maxCharacters: 200_000 }, signal)
   const text = Array.isArray(result?.content)
     ? result.content
         .filter((part) => part?.type === 'text' && typeof part.text === 'string')
